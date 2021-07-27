@@ -7,4 +7,7 @@ edition = "2018"
 
 [dependencies]
 iced = "0.3.0"
+iced_native = "0.4"
+iced_futures = "0.2.0"
 reqwest = "0.11.4"
+tokio = { version = "1", features = ["full"] }
