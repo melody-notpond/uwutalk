@@ -5,17 +5,19 @@ use iced::{Application, Clipboard, Command, Element, Length, Subscription, execu
 use iced_futures::futures::stream::{self, BoxStream};
 use iced_native::subscription::Recipe;
 use tokio::sync::{mpsc, oneshot};
-use reqwest::{Error, Response};
+use reqwest::Error;
+
+use super::chat::Event;
 
 pub enum ClientMessage {
-    SendMessage(String, oneshot::Sender<Result<Response, Error>>),
+    SendMessage(String, oneshot::Sender<Result<Event, Error>>),
 }
 
 pub struct Chat {
     entry_text: String,
     entry_state: text_input::State,
     messages_state: scrollable::State,
-    messages: VecDeque<String>,
+    messages_queue: VecDeque<String>,
     tx: mpsc::Sender<ClientMessage>,
     event_uid: u64,
 }
@@ -34,8 +36,8 @@ pub enum ListenForEvents {
 
 enum SendMessageState {
     Starting(String, mpsc::Sender<ClientMessage>),
-    Waiting(oneshot::Receiver<Result<Response, Error>>),
-    Finished(Response),
+    Waiting(oneshot::Receiver<Result<Event, Error>>),
+    Finished(Event),
     FinishedForRealsies,
 }
 
@@ -78,7 +80,7 @@ where H: Hasher {
                         }
 
                         SendMessageState::Finished(v) => {
-                            println!("{}", v.text().await.unwrap());
+                            println!("{:?}", v);
                             Some((Message::Dequeue, SendMessageState::FinishedForRealsies))
                         }
 
@@ -100,7 +102,7 @@ impl Application for Chat {
             entry_text: String::new(),
             entry_state: text_input::State::new(),
             messages_state: scrollable::State::new(),
-            messages: VecDeque::new(),
+            messages_queue: VecDeque::new(),
             tx: flags,
             event_uid: 0,
         }, Command::none())
@@ -117,12 +119,12 @@ impl Application for Chat {
             Message::InputChanged(input) => self.entry_text = input,
             Message::Send => {
                 self.event_uid += 1;
-                self.messages.push_back(self.entry_text.clone());
+                self.messages_queue.push_back(self.entry_text.clone());
                 self.entry_text = String::new();
             }
 
             Message::Dequeue => {
-                self.messages.pop_front();
+                self.messages_queue.pop_front();
             }
         }
 
@@ -133,9 +135,24 @@ impl Application for Chat {
         let entry = TextInput::new(&mut self.entry_state, "Say hello!", &self.entry_text, Message::InputChanged)
             .width(Length::Fill)
             .on_submit(Message::Send);
-        let messages = Scrollable::new(&mut self.messages_state)
+        let mut messages = Scrollable::new(&mut self.messages_state)
             .width(Length::Fill)
             .height(Length::Fill);
+
+        let messages_raw = vec![(String::from("avatar.jpg"), String::from("test@example.com"), String::from("this is my example message"))];
+        for message in messages_raw {
+            let avatar = Image::new(message.0).width(Length::Units(50)).height(Length::Units(50));
+            let display_name = Text::new(message.1);
+            let message = Text::new(message.2);
+            let column = Column::new()
+                .push(display_name)
+                .push(message);
+            let row = Row::new()
+                .push(Container::new(avatar))
+                .push(column);
+            messages = messages.push(row);
+        }
+
         let right_column = Column::new()
             .push(messages)
             .spacing(20)
@@ -144,8 +161,8 @@ impl Application for Chat {
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
-        if !self.messages.is_empty() {
-            iced::Subscription::from_recipe(ListenForEvents::MessageSend(self.event_uid, self.messages.front().unwrap().clone(), self.tx.clone()))
+        if !self.messages_queue.is_empty() {
+            iced::Subscription::from_recipe(ListenForEvents::MessageSend(self.event_uid, self.messages_queue.front().unwrap().clone(), self.tx.clone()))
         } else {
             Subscription::none()
         }

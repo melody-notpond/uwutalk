@@ -15,7 +15,10 @@ async fn main() -> iced::Result {
     let room = contents.next().unwrap();
 
     let room = MatrixRoom::new(homeserver, room);
-    let client = MatrixClient::new(access_token);
+    let client = MatrixClient::new(homeserver, access_token);
+
+    let result = client.get_state().await.unwrap();
+    println!("{:#?}", result.rooms.join.iter().next().unwrap().1.timeline);
 
     let (tx, mut rx) = mpsc::channel(32);
 
