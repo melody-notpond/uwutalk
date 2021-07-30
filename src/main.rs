@@ -37,8 +37,7 @@ async fn main() -> iced::Result {
                     } else {
                         Some(next_batch)
                     };
-                    let state = client.get_state(next_batch).await.unwrap();
-                    let _ = resp.send(Ok(state));
+                    let _ = resp.send(client.get_state(next_batch).await);
                 }
             }
         }
