@@ -7,7 +7,7 @@ use iced_native::subscription::Recipe;
 use tokio::sync::{mpsc, oneshot};
 use reqwest::Error;
 
-use super::chat::{Event, SyncState};
+use super::chat::{Event, SyncState, RoomEvent};
 
 pub enum ClientMessage {
     SendMessage(String, oneshot::Sender<Result<Event, Error>>),
@@ -19,6 +19,7 @@ pub struct Chat {
     entry_state: text_input::State,
     messages_state: scrollable::State,
     messages_queue: VecDeque<String>,
+    messages: Vec<RoomEvent>,
     tx: mpsc::Sender<ClientMessage>,
     event_uid: u64,
     next_batch: String,
@@ -63,7 +64,6 @@ where H: Hasher {
         match self {
             ListenForEvents::MessageSend(euid, msg, _) => {
                 euid.hash(state);
-                0.hash(state);
                 msg.hash(state);
             }
 
@@ -147,6 +147,7 @@ impl Application for Chat {
             entry_state: text_input::State::new(),
             messages_state: scrollable::State::new(),
             messages_queue: VecDeque::new(),
+            messages: Vec::new(),
             tx: flags,
             event_uid: 0,
             next_batch: String::new()
@@ -178,6 +179,10 @@ impl Application for Chat {
             Message::NewSync(state) => {
                 self.event_uid += 1;
                 self.next_batch = state.next_batch;
+                match state.rooms.join.into_iter().next() {
+                    Some((_, v)) => self.messages.extend(v.timeline.events),
+                    None => ()
+                }
             }
         }
 
@@ -192,11 +197,14 @@ impl Application for Chat {
             .width(Length::Fill)
             .height(Length::Fill);
 
-        let messages_raw = vec![(String::from("avatar.jpg"), String::from("test@example.com"), String::from("this is my example message"))];
-        for message in messages_raw {
-            let avatar = Image::new(message.0).width(Length::Units(50)).height(Length::Units(50));
-            let display_name = Text::new(message.1);
-            let message = Text::new(message.2);
+        for message in self.messages.iter() {
+            let content = match message.content.get("body") {
+                Some(v) => v.as_str().unwrap(),
+                None => continue,
+            };
+            let avatar = Image::new("avatar.jpg").width(Length::Units(50)).height(Length::Units(50));
+            let display_name = Text::new(message.sender.clone());
+            let message = Text::new(content);
             let column = Column::new()
                 .push(display_name)
                 .push(message);
