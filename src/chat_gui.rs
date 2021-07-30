@@ -7,10 +7,11 @@ use iced_native::subscription::Recipe;
 use tokio::sync::{mpsc, oneshot};
 use reqwest::Error;
 
-use super::chat::Event;
+use super::chat::{Event, SyncState};
 
 pub enum ClientMessage {
     SendMessage(String, oneshot::Sender<Result<Event, Error>>),
+    ClientSync(String, oneshot::Sender<Result<SyncState, Error>>),
 }
 
 pub struct Chat {
@@ -20,6 +21,7 @@ pub struct Chat {
     messages_queue: VecDeque<String>,
     tx: mpsc::Sender<ClientMessage>,
     event_uid: u64,
+    next_batch: String,
 }
 
 #[derive(Debug, Clone)]
@@ -27,11 +29,13 @@ pub enum Message {
     None,
     InputChanged(String),
     Send,
-    Dequeue
+    Dequeue,
+    NewSync(SyncState)
 }
 
 pub enum ListenForEvents {
-    MessageSend(u64, String, mpsc::Sender<ClientMessage>)
+    MessageSend(u64, String, mpsc::Sender<ClientMessage>),
+    ClientSync(u64, String, mpsc::Sender<ClientMessage>)
 }
 
 enum SendMessageState {
@@ -39,6 +43,14 @@ enum SendMessageState {
     Waiting(oneshot::Receiver<Result<Event, Error>>),
     Finished(Event),
     FinishedForRealsies,
+}
+
+enum SyncClientState {
+    Starting(String, mpsc::Sender<ClientMessage>),
+    Waiting(oneshot::Receiver<Result<SyncState, Error>>),
+    Finished(SyncState),
+    FinishedForRealsies
+
 }
 
 impl<H, E> Recipe<H, E> for ListenForEvents
@@ -53,6 +65,11 @@ where H: Hasher {
                 euid.hash(state);
                 0.hash(state);
                 msg.hash(state);
+            }
+
+            ListenForEvents::ClientSync(euid, next_batch, _) => {
+                euid.hash(state);
+                next_batch.hash(state);
             }
         }
     }
@@ -79,12 +96,39 @@ where H: Hasher {
                             }
                         }
 
-                        SendMessageState::Finished(v) => {
-                            println!("{:?}", v);
+                        SendMessageState::Finished(_) => {
                             Some((Message::Dequeue, SendMessageState::FinishedForRealsies))
                         }
 
                         SendMessageState::FinishedForRealsies => None,
+                    }
+                }))
+            }
+
+            ListenForEvents::ClientSync(_, next_batch, tx) => {
+                Box::pin(stream::unfold(SyncClientState::Starting(next_batch, tx), async move |state| {
+                    match state {
+                        SyncClientState::Starting(next_batch, tx) => {
+                            let (oneshot_tx, oneshot_rx) = oneshot::channel();
+                            let message = ClientMessage::ClientSync(next_batch, oneshot_tx);
+                            let _ = tx.send(message).await;
+                            Some((Message::None, SyncClientState::Waiting(oneshot_rx)))
+                        }
+
+                        SyncClientState::Waiting(rx) => {
+                            match rx.await {
+                                Ok(Ok(v)) => Some((Message::None, SyncClientState::Finished(v))),
+
+                                // TODO: try sending the message again
+                                _ => None
+                            }
+                        }
+
+                        SyncClientState::Finished(v) => {
+                            Some((Message::NewSync(v), SyncClientState::FinishedForRealsies))
+                        }
+
+                        SyncClientState::FinishedForRealsies => None,
                     }
                 }))
             }
@@ -105,6 +149,7 @@ impl Application for Chat {
             messages_queue: VecDeque::new(),
             tx: flags,
             event_uid: 0,
+            next_batch: String::new()
         }, Command::none())
     }
 
@@ -117,14 +162,22 @@ impl Application for Chat {
             Message::None => (),
 
             Message::InputChanged(input) => self.entry_text = input,
+
             Message::Send => {
-                self.event_uid += 1;
-                self.messages_queue.push_back(self.entry_text.clone());
-                self.entry_text = String::new();
+                if !self.entry_text.is_empty() {
+                    self.event_uid += 1;
+                    self.messages_queue.push_back(self.entry_text.clone());
+                    self.entry_text = String::new();
+                }
             }
 
             Message::Dequeue => {
                 self.messages_queue.pop_front();
+            }
+
+            Message::NewSync(state) => {
+                self.event_uid += 1;
+                self.next_batch = state.next_batch;
             }
         }
 
@@ -164,7 +217,7 @@ impl Application for Chat {
         if !self.messages_queue.is_empty() {
             iced::Subscription::from_recipe(ListenForEvents::MessageSend(self.event_uid, self.messages_queue.front().unwrap().clone(), self.tx.clone()))
         } else {
-            Subscription::none()
+            Subscription::from_recipe(ListenForEvents::ClientSync(self.event_uid, self.next_batch.clone(), self.tx.clone()))
         }
     }
 

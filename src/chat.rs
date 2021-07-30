@@ -15,24 +15,24 @@ pub struct MatrixRoom {
     id: String
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct Event {
     pub event_id: String
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct State {
     pub events: Vec<Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct UnsignedData {
     pub age: i64,
     pub redacted_because: Option<Event>,
     pub transaction_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct RoomEvent {
     pub content: Value,
 
@@ -44,25 +44,25 @@ pub struct RoomEvent {
     pub unsigned: UnsignedData
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Timeline {
     pub events: Vec<RoomEvent>,
     pub limited: bool,
     pub prev_batch: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct Ephemeral {
     pub events: Vec<Value>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct UnreadNotificationCounts {
     pub highlight_count: i64,
     pub notification_count: i64
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct JoinedRoom {
     pub summary: HashMap<String, Value>,
     pub state: State,
@@ -72,14 +72,14 @@ pub struct JoinedRoom {
     pub unread_notifications: UnreadNotificationCounts,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct SyncRooms {
     pub join: HashMap<String, JoinedRoom>,
     pub invite: HashMap<String, Value>,
     pub leave: HashMap<String, Value>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct SyncState {
     pub next_batch: String,
     pub rooms: SyncRooms,
@@ -116,9 +116,15 @@ impl MatrixClient {
         Ok(serde_json::from_str(&event).unwrap())
     }
 
-    pub async fn get_state(&self) -> Result<SyncState, Error> {
-        let state = self.client.get(format!(r#"https://{}/_matrix/client/r0/sync"#, self.homeserver))
-            .query(&[("filter", r#"{"room":{"timeline":{"limit":1}}}"#)])
+    pub async fn get_state(&self, since: Option<String>) -> Result<SyncState, Error> {
+        let mut queries = vec![];
+        if let Some(since) = since {
+            queries.push(("since", since));
+        }
+
+        let state = self.client.get(format!("https://{}/_matrix/client/r0/sync", self.homeserver))
+            //.query(&[("filter", r#"{"room":{"timeline":{"limit":1}}}"#)])
+            .query(&queries)
             .bearer_auth(&self.access_code)
             .send().await?.text().await?;
         Ok(serde_json::from_str(&state).unwrap())

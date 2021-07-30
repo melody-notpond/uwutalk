@@ -17,8 +17,8 @@ async fn main() -> iced::Result {
     let room = MatrixRoom::new(homeserver, room);
     let client = MatrixClient::new(homeserver, access_token);
 
-    let result = client.get_state().await.unwrap();
-    println!("{:#?}", result.rooms.join.iter().next().unwrap().1.timeline);
+    //let result = client.get_state(None).await.unwrap();
+    //println!("{:#?}", result.rooms.join.iter().next().unwrap().1.timeline);
 
     let (tx, mut rx) = mpsc::channel(32);
 
@@ -29,6 +29,16 @@ async fn main() -> iced::Result {
             match msg {
                 SendMessage(msg, resp) => {
                     let _ = resp.send(client.send_message(&room, &msg).await);
+                }
+
+                ClientSync(next_batch, resp) => {
+                    let next_batch = if next_batch.is_empty() {
+                        None
+                    } else {
+                        Some(next_batch)
+                    };
+                    let state = client.get_state(next_batch).await.unwrap();
+                    let _ = resp.send(Ok(state));
                 }
             }
         }
