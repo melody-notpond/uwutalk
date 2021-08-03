@@ -6,6 +6,7 @@ use iced_futures::futures::stream::{self, BoxStream};
 use iced_native::subscription::Recipe;
 use tokio::sync::{mpsc, oneshot};
 use reqwest::Error;
+use uwuifier::uwuify_str_sse;
 
 use super::chat::{Event, SyncState, RoomEvent};
 
@@ -167,7 +168,12 @@ impl Application for Chat {
             Message::Send => {
                 if !self.entry_text.is_empty() {
                     self.event_uid += 1;
-                    self.messages_queue.push_back(self.entry_text.clone());
+                    if self.entry_text.starts_with("/uwu ") {
+                        self.messages_queue.push_back(uwuify_str_sse(&self.entry_text[5..]));
+                    } else {
+                        self.messages_queue.push_back(self.entry_text.clone());
+                    }
+
                     self.entry_text = String::new();
                 }
             }
