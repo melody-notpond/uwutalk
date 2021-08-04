@@ -3,7 +3,7 @@ use std::fs;
 use iced::{Application, Settings};
 use tokio::sync::mpsc;
 
-use uwutalk::chat::{MatrixClient, MatrixRoom};
+use uwutalk::chat::MatrixClient;
 use uwutalk::chat_gui::Chat;
 
 #[tokio::main]
@@ -12,9 +12,7 @@ async fn main() -> iced::Result {
     let mut contents = file.split('\n');
     let access_token = contents.next().unwrap();
     let homeserver = contents.next().unwrap();
-    let room = contents.next().unwrap();
 
-    let room = MatrixRoom::new(homeserver, room);
     let client = MatrixClient::new(homeserver, access_token);
 
     //let result = client.get_state(None).await.unwrap();
@@ -27,8 +25,8 @@ async fn main() -> iced::Result {
 
         while let Some(msg) = rx.recv().await {
             match msg {
-                SendMessage(msg, resp) => {
-                    let _ = resp.send(client.send_message(&room, &msg).await);
+                SendMessage(room_id, msg, resp) => {
+                    let _ = resp.send(client.send_message(&room_id, &msg).await);
                 }
 
                 ClientSync(next_batch, resp) => {

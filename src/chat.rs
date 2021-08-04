@@ -10,11 +10,6 @@ pub struct MatrixClient {
     access_code: String
 }
 
-pub struct MatrixRoom {
-    homeserver: String,
-    id: String
-}
-
 #[derive(Deserialize, Debug, Clone)]
 pub struct Event {
     pub event_id: String
@@ -90,15 +85,6 @@ pub struct SyncState {
     pub device_one_time_keys_count: serde_json::Value,
 }
 
-impl MatrixRoom {
-    pub fn new(homeserver: &str, id: &str) -> MatrixRoom {
-        MatrixRoom {
-            homeserver: String::from(homeserver),
-            id: String::from(id)
-        }
-    }
-}
-
 impl MatrixClient {
     pub fn new(homeserver: &str, access_code: &str) -> MatrixClient {
         MatrixClient {
@@ -108,8 +94,8 @@ impl MatrixClient {
         }
     }
 
-    pub async fn send_message(&self, room: &MatrixRoom, content: &str) -> Result<Event, Error> {
-        let event = self.client.post(format!("https://{}/_matrix/client/r0/rooms/{}:{}/send/m.room.message", self.homeserver, room.id, room.homeserver))
+    pub async fn send_message(&self, room: &str, content: &str) -> Result<Event, Error> {
+        let event = self.client.post(format!("https://{}/_matrix/client/r0/rooms/{}/send/m.room.message", self.homeserver, room))
             .body(format!("{{\"msgtype\": \"m.text\", \"body\": {:?}}}", content))
             .bearer_auth(&self.access_code)
             .send().await?.text().await?;

@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::hash::Hasher;
 
 use iced::{Application, Clipboard, Command, Element, Length, Subscription, executor, widget::*};
@@ -11,19 +11,47 @@ use uwuifier::uwuify_str_sse;
 use super::chat::{Event, SyncState, RoomEvent};
 
 pub enum ClientMessage {
-    SendMessage(String, oneshot::Sender<Result<Event, Error>>),
+    SendMessage(String, String, oneshot::Sender<Result<Event, Error>>),
     ClientSync(String, oneshot::Sender<Result<SyncState, Error>>),
+}
+
+struct Channel {
+    id: String,
+    name: String,
+    button: button::State,
+    messages: Vec<RoomEvent>,
 }
 
 pub struct Chat {
     entry_text: String,
     entry_state: text_input::State,
     messages_state: scrollable::State,
+    channels_state: scrollable::State,
     messages_queue: VecDeque<String>,
-    messages: Vec<RoomEvent>,
+    current_channel: String,
+    channels: Vec<String>,
+    channels_hashed: HashMap<String, Channel>,
     tx: mpsc::Sender<ClientMessage>,
     event_uid: u64,
     next_batch: String,
+}
+
+impl Chat {
+    fn new(tx: mpsc::Sender<ClientMessage>) -> Chat {
+        Chat {
+            entry_text: String::new(),
+            entry_state: text_input::State::new(),
+            messages_state: scrollable::State::new(),
+            channels_state: scrollable::State::new(),
+            messages_queue: VecDeque::new(),
+            current_channel: String::new(),
+            channels: Vec::new(),
+            channels_hashed: HashMap::new(),
+            tx,
+            event_uid: 0,
+            next_batch: String::new()
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -32,16 +60,17 @@ pub enum Message {
     InputChanged(String),
     Send,
     Dequeue,
-    NewSync(SyncState)
+    NewSync(SyncState),
+    ChannelChanged(String)
 }
 
 pub enum ListenForEvents {
-    MessageSend(u64, String, mpsc::Sender<ClientMessage>),
+    MessageSend(u64, String, String, mpsc::Sender<ClientMessage>),
     ClientSync(u64, String, mpsc::Sender<ClientMessage>)
 }
 
 enum SendMessageState {
-    Starting(String, mpsc::Sender<ClientMessage>),
+    Starting(String, String, mpsc::Sender<ClientMessage>),
     Waiting(oneshot::Receiver<Result<Event, Error>>),
     Finished(Event),
     FinishedForRealsies,
@@ -63,8 +92,9 @@ where H: Hasher {
         use std::hash::Hash;
 
         match self {
-            ListenForEvents::MessageSend(euid, msg, _) => {
+            ListenForEvents::MessageSend(euid, room_id, msg, _) => {
                 euid.hash(state);
+                room_id.hash(state);
                 msg.hash(state);
             }
 
@@ -80,12 +110,12 @@ where H: Hasher {
         _input: BoxStream<E>,
     ) -> BoxStream<Self::Output> {
         match *self {
-            ListenForEvents::MessageSend(_, msg, tx) => {
-                Box::pin(stream::unfold(SendMessageState::Starting(msg, tx), async move |state| {
+            ListenForEvents::MessageSend(_, room_id, msg, tx) => {
+                Box::pin(stream::unfold(SendMessageState::Starting(room_id, msg, tx), async move |state| {
                     match state {
-                        SendMessageState::Starting(msg, tx) => {
+                        SendMessageState::Starting(room_id, msg, tx) => {
                             let (oneshot_tx, oneshot_rx) = oneshot::channel();
-                            let message = ClientMessage::SendMessage(msg, oneshot_tx);
+                            let message = ClientMessage::SendMessage(room_id, msg, oneshot_tx);
                             let _ = tx.send(message).await;
                             Some((Message::None, SendMessageState::Waiting(oneshot_rx)))
                         }
@@ -143,16 +173,7 @@ impl Application for Chat {
     type Flags = mpsc::Sender<ClientMessage>;
 
     fn new(flags: Self::Flags) -> (Chat, Command<Self::Message>) {
-        (Chat {
-            entry_text: String::new(),
-            entry_state: text_input::State::new(),
-            messages_state: scrollable::State::new(),
-            messages_queue: VecDeque::new(),
-            messages: Vec::new(),
-            tx: flags,
-            event_uid: 0,
-            next_batch: String::new()
-        }, Command::none())
+        (Chat::new(flags), Command::none())
     }
 
     fn title(&self) -> String {
@@ -185,10 +206,24 @@ impl Application for Chat {
             Message::NewSync(state) => {
                 self.event_uid += 1;
                 self.next_batch = state.next_batch;
-                match state.rooms.join.into_iter().next() {
-                    Some((_, v)) => self.messages.extend(v.timeline.events),
-                    None => ()
+
+                for (id, joined) in state.rooms.join {
+                    if !self.channels_hashed.contains_key(&id) {
+                        self.channels_hashed.insert(id.clone(), Channel {
+                            id: id.clone(),
+                            name: String::from("test name"),
+                            button: button::State::new(),
+                            messages: joined.timeline.events,
+                        });
+                        self.channels.push(id);
+                    } else {
+                        self.channels_hashed.get_mut(&id).unwrap().messages.extend(joined.timeline.events);
+                    }
                 }
+            }
+
+            Message::ChannelChanged(id) => {
+                self.current_channel = id;
             }
         }
 
@@ -201,35 +236,60 @@ impl Application for Chat {
             .on_submit(Message::Send);
         let mut messages = Scrollable::new(&mut self.messages_state)
             .width(Length::Fill)
+            .height(Length::Fill)
+            .spacing(10);
+
+        if let Some(channel) = self.channels_hashed.get(&self.current_channel) {
+            for message in channel.messages.iter() {
+                let content = match message.content.get("body") {
+                    Some(v) => v.as_str().unwrap(),
+                    None => continue,
+                };
+                let avatar = Image::new("avatar.jpg").width(Length::Units(50)).height(Length::Units(50));
+                let display_name = Text::new(message.sender.clone());
+                let message = Text::new(content);
+                let column = Column::new()
+                    .push(display_name)
+                    .push(message);
+                let row = Row::new()
+                    .push(Container::new(avatar))
+                    .push(column)
+                    .spacing(5);
+                messages = messages.push(row);
+            }
+        }
+
+        let mut channels = Scrollable::new(&mut self.channels_state)
+            .width(Length::Units(200))
             .height(Length::Fill);
 
-        for message in self.messages.iter() {
-            let content = match message.content.get("body") {
-                Some(v) => v.as_str().unwrap(),
-                None => continue,
-            };
-            let avatar = Image::new("avatar.jpg").width(Length::Units(50)).height(Length::Units(50));
-            let display_name = Text::new(message.sender.clone());
-            let message = Text::new(content);
-            let column = Column::new()
-                .push(display_name)
-                .push(message);
-            let row = Row::new()
-                .push(Container::new(avatar))
-                .push(column);
-            messages = messages.push(row);
+        for (id, channel) in self.channels_hashed.iter_mut() {
+            let name = Text::new(id);
+            let button = Button::new(&mut channel.button, name)
+                .on_press(Message::ChannelChanged(channel.id.clone()));
+            channels = channels.push(button);
         }
 
         let right_column = Column::new()
             .push(messages)
             .spacing(20)
             .push(entry);
-        right_column.into()
+
+        let row = Row::new()
+            .push(channels)
+            .spacing(10)
+            .push(right_column);
+
+        let container = Container::new(row)
+            .padding(5)
+            .width(Length::Fill)
+            .height(Length::Fill);
+        container.into()
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
         if !self.messages_queue.is_empty() {
-            iced::Subscription::from_recipe(ListenForEvents::MessageSend(self.event_uid, self.messages_queue.front().unwrap().clone(), self.tx.clone()))
+            iced::Subscription::from_recipe(ListenForEvents::MessageSend(self.event_uid, self.current_channel.clone(), self.messages_queue.front().unwrap().clone(), self.tx.clone()))
         } else {
             Subscription::from_recipe(ListenForEvents::ClientSync(self.event_uid, self.next_batch.clone(), self.tx.clone()))
         }
