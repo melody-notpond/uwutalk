@@ -16,8 +16,23 @@ pub struct Event {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+pub struct StateEvent {
+    pub content: Value,
+
+    #[serde(rename = "type")]
+    pub type_: String,
+
+    pub event_id: String,
+    pub sender: String,
+    pub origin_server_ts: u64,
+    pub unsigned: UnsignedData,
+    pub prev_content: Option<Value>,
+    pub state_key: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
 pub struct State {
-    pub events: Vec<Value>,
+    pub events: Vec<StateEvent>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -35,7 +50,7 @@ pub struct RoomEvent {
     pub type_: String,
     pub event_id: String,
     pub sender: String,
-    pub origin_server_ts: i64,
+    pub origin_server_ts: u64,
     pub unsigned: UnsignedData
 }
 
@@ -59,6 +74,7 @@ pub struct UnreadNotificationCounts {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct JoinedRoom {
+    pub name: Option<String>,
     pub summary: HashMap<String, Value>,
     pub state: State,
     pub timeline: Timeline,
@@ -102,6 +118,25 @@ impl MatrixClient {
         Ok(serde_json::from_str(&event).unwrap())
     }
 
+    async fn get_name(&self, room: &str) -> Option<String> {
+        let name = self.client.get(format!("https://{}/_matrix/client/r0/rooms/{}/state/m.room.name", self.homeserver, room))
+            .bearer_auth(&self.access_code)
+            .send().await.ok()?;
+        if name.status() == 200 {
+            Some(String::from(serde_json::from_str::<Value>(&name.text().await.ok()?).ok()?["name"].as_str()?))
+        } else {
+            let name = self.client.get(format!("https://{}/_matrix/client/r0/rooms/{}/state/m.room.canonical_alias", self.homeserver, room))
+                .bearer_auth(&self.access_code)
+                .send().await.ok()?;
+
+            if name.status() == 200 {
+                Some(String::from(serde_json::from_str::<Value>(&name.text().await.ok()?).ok()?["alias"].as_str()?))
+            } else {
+                None
+            }
+        }
+    }
+
     pub async fn get_state(&self, since: Option<String>) -> Result<SyncState, Error> {
         let mut queries = vec![];
         if let Some(since) = since {
@@ -113,6 +148,12 @@ impl MatrixClient {
             .query(&queries)
             .bearer_auth(&self.access_code)
             .send().await?.text().await?;
-        Ok(serde_json::from_str(&state).unwrap())
+        let mut state: SyncState = serde_json::from_str(&state).unwrap();
+
+        for (id, joined) in state.rooms.join.iter_mut() {
+            joined.name = self.get_name(id).await;
+        }
+
+        Ok(state)
     }
 }

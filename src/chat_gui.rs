@@ -209,9 +209,13 @@ impl Application for Chat {
 
                 for (id, joined) in state.rooms.join {
                     if !self.channels_hashed.contains_key(&id) {
+                        println!("id: {}", id);
                         self.channels_hashed.insert(id.clone(), Channel {
                             id: id.clone(),
-                            name: String::from("test name"),
+                            name: match joined.name {
+                                Some(v) => v,
+                                None => String::from("<unnamed room>")
+                            },
                             button: button::State::new(),
                             messages: joined.timeline.events,
                         });
@@ -264,16 +268,19 @@ impl Application for Chat {
             .height(Length::Fill);
 
         for (id, channel) in self.channels_hashed.iter_mut() {
-            let name = Text::new(id);
+            let name = Text::new(&channel.name);
             let button = Button::new(&mut channel.button, name)
-                .on_press(Message::ChannelChanged(channel.id.clone()));
+                .on_press(Message::ChannelChanged(id.clone()));
             channels = channels.push(button);
         }
 
-        let right_column = Column::new()
+        let mut right_column = Column::new()
             .push(messages)
-            .spacing(20)
-            .push(entry);
+            .spacing(20);
+
+        if !self.current_channel.is_empty() {
+            right_column = right_column.push(entry);
+        }
 
         let row = Row::new()
             .push(channels)
