@@ -37,7 +37,7 @@ pub struct State {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct UnsignedData {
-    pub age: i64,
+    pub age: Option<i64>,
     pub redacted_because: Option<Event>,
     pub transaction_id: Option<String>,
 }
@@ -156,7 +156,13 @@ impl MatrixClient {
             .query(&queries)
             .bearer_auth(&self.access_code)
             .send().await?.text().await?;
-        let mut state: SyncState = serde_json::from_str(&state).unwrap();
+
+        let mut state: SyncState = match serde_json::from_str(&state) {
+            Ok(v) => v,
+            Err(e) => {
+                panic!("oh no: {}", e);
+            }
+        };
 
         for (id, joined) in state.rooms.join.iter_mut() {
             joined.name = self.get_name(id).await;
