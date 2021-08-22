@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 #[derive(Debug, Clone)]
 pub enum MarkdownAst<'a> {
     Text(&'a str),
@@ -298,4 +300,125 @@ pub fn parse_markdown<'a>(s: &'a str) -> Vec<MarkdownAst<'a>> {
     }
 
     vec
+}
+
+fn markdown_to_html_helper(s: &mut String, ast: MarkdownAst) -> Result<(), std::fmt::Error> {
+    match ast {
+        MarkdownAst::Text(t) => write!(s, "{}", t),
+
+        MarkdownAst::Bold(v) => {
+            write!(s, "<strong>")?;
+            for v in v {
+                markdown_to_html_helper(s, v)?;
+            }
+            write!(s, "</strong>")
+        }
+
+        MarkdownAst::Italics(v) => {
+            write!(s, "<em>")?;
+            for v in v {
+                markdown_to_html_helper(s, v)?;
+            }
+            write!(s, "</em>")
+        }
+
+        MarkdownAst::BulletPoint(_, v) => {
+            write!(s, "<li>")?;
+            for v in v {
+                markdown_to_html_helper(s, v)?;
+            }
+            write!(s, "</li>")
+        }
+
+        MarkdownAst::Header(i, v) => {
+            write!(s, "<h{}>", i)?;
+            for v in v {
+                markdown_to_html_helper(s, v)?;
+            }
+            write!(s, "</h{}>", i)
+        }
+
+        MarkdownAst::Code(v) => write!(s, "<code>{}</code>", v),
+
+        // TODO: use the language field
+        MarkdownAst::Codeblock(_, v) => write!(s, "<pre><code>{}</code></pre>", v),
+
+        MarkdownAst::Underline(v) => {
+            write!(s, "<u>")?;
+            for v in v {
+                markdown_to_html_helper(s, v)?;
+            }
+            write!(s, "</u>")
+        }
+
+        MarkdownAst::StrikeThrough(v) => {
+            write!(s, "<del>")?;
+            for v in v {
+                markdown_to_html_helper(s, v)?;
+            }
+            write!(s, "</del>")
+        }
+
+        MarkdownAst::Quotes(v) => {
+            write!(s, "<blockquote>")?;
+            for v in v {
+                markdown_to_html_helper(s, v)?;
+            }
+            write!(s, "</blockquote>")
+        }
+
+        MarkdownAst::Spoiler(v) => {
+            write!(s, "<span data-mx-spoiler>")?;
+            for v in v {
+                markdown_to_html_helper(s, v)?;
+            }
+            write!(s, "</span>")
+        }
+
+        MarkdownAst::Link(v, href) => {
+            write!(s, "<a href={:?}>", href)?;
+            for v in v {
+                markdown_to_html_helper(s, v)?;
+            }
+            write!(s, "</a>")
+        }
+
+        MarkdownAst::Line => write!(s, "<hr>"),
+    }
+}
+
+pub fn markdown_to_html(asts: Vec<MarkdownAst>) -> String {
+    let mut s = String::new();
+    let mut depths = vec![];
+    for a in asts {
+        if let MarkdownAst::BulletPoint(i, _) = a {
+            match depths.last() {
+                Some(j) if i < *j => {
+                    let _ = write!(s, "</ul>");
+                    while matches!(depths.last(), Some(j) if i < *j) {
+                        depths.pop();
+                    }
+                }
+
+                Some(j) if i > *j => {
+                    let _ = write!(s, "<ul>");
+                    depths.push(i);
+                }
+
+                Some(_) => (),
+
+                None => {
+                    let _ = write!(s, "<ul>");
+                    depths.push(i);
+                }
+            }
+        } else if !depths.is_empty() {
+            while depths.pop().is_some() {
+                let _ = write!(s, "</ul>");
+            }
+        }
+
+        let _ = markdown_to_html_helper(&mut s, a);
+    }
+    s
 }

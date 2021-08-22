@@ -9,9 +9,10 @@ use reqwest::Error;
 use uwuifier::uwuify_str_sse;
 
 use super::chat::{Event, SyncState, RoomEvent};
+use super::markdown;
 
 pub enum ClientMessage {
-    SendMessage(String, String, oneshot::Sender<Result<Event, Error>>),
+    SendMessage(String, String, String, oneshot::Sender<Result<Event, Error>>),
     ClientSync(String, String, oneshot::Sender<Result<SyncState, Error>>),
 }
 
@@ -27,7 +28,7 @@ pub struct Chat {
     entry_state: text_input::State,
     messages_state: scrollable::State,
     channels_state: scrollable::State,
-    messages_queue: VecDeque<String>,
+    messages_queue: VecDeque<(String, String)>,
     current_channel: String,
     channels: Vec<String>,
     channels_hashed: HashMap<String, Channel>,
@@ -65,12 +66,12 @@ pub enum Message {
 }
 
 pub enum ListenForEvents {
-    MessageSend(u64, String, String, mpsc::Sender<ClientMessage>),
+    MessageSend(u64, String, (String, String), mpsc::Sender<ClientMessage>),
     ClientSync(u64, String, String, mpsc::Sender<ClientMessage>)
 }
 
 enum SendMessageState {
-    Starting(String, String, mpsc::Sender<ClientMessage>),
+    Starting(String, String, String, mpsc::Sender<ClientMessage>),
     Waiting(oneshot::Receiver<Result<Event, Error>>),
     Finished(Event),
     FinishedForRealsies,
@@ -111,12 +112,12 @@ where H: Hasher {
         _input: BoxStream<E>,
     ) -> BoxStream<Self::Output> {
         match *self {
-            ListenForEvents::MessageSend(_, room_id, msg, tx) => {
-                Box::pin(stream::unfold(SendMessageState::Starting(room_id, msg, tx), async move |state| {
+            ListenForEvents::MessageSend(_, room_id, (msg, formatted), tx) => {
+                Box::pin(stream::unfold(SendMessageState::Starting(room_id, msg, formatted, tx), async move |state| {
                     match state {
-                        SendMessageState::Starting(room_id, msg, tx) => {
+                        SendMessageState::Starting(room_id, msg, formatted, tx) => {
                             let (oneshot_tx, oneshot_rx) = oneshot::channel();
-                            let message = ClientMessage::SendMessage(room_id, msg, oneshot_tx);
+                            let message = ClientMessage::SendMessage(room_id, msg, formatted, oneshot_tx);
                             let _ = tx.send(message).await;
                             Some((Message::None, SendMessageState::Waiting(oneshot_rx)))
                         }
@@ -190,11 +191,14 @@ impl Application for Chat {
             Message::Send => {
                 if !self.entry_text.is_empty() {
                     self.event_uid += 1;
-                    if let Some(v) = self.entry_text.strip_prefix("/uwu ") {
-                        self.messages_queue.push_back(uwuify_str_sse(v));
+                    let entry = if let Some(v) = self.entry_text.strip_prefix("/uwu ") {
+                        uwuify_str_sse(v)
                     } else {
-                        self.messages_queue.push_back(self.entry_text.clone());
-                    }
+                        self.entry_text.clone()
+                    };
+                    let markdown = markdown::parse_markdown(&entry);
+                    let html = markdown::markdown_to_html(markdown);
+                    self.messages_queue.push_back((entry, html));
 
                     self.entry_text = String::new();
                 }

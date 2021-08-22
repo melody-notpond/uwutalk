@@ -110,9 +110,15 @@ impl MatrixClient {
         }
     }
 
-    pub async fn send_message(&self, room: &str, content: &str) -> Result<Event, Error> {
+    pub async fn send_message(&self, room: &str, content: &str, formatted: Option<&String>) -> Result<Event, Error> {
+        let body = if let Some(formatted) = formatted {
+            format!("{{\"msgtype\": \"m.text\", \"body\": {:?}, \"formatted_body\": {:?}, \"format\": \"org.matrix.custom.html\"}}", content, formatted)
+        } else {
+            format!("{{\"msgtype\": \"m.text\", \"body\": {:?}}}", content)
+        };
+
         let event = self.client.post(format!("https://{}/_matrix/client/r0/rooms/{}/send/m.room.message", self.homeserver, room))
-            .body(format!("{{\"msgtype\": \"m.text\", \"body\": {:?}}}", content))
+            .body(body)
             .bearer_auth(&self.access_code)
             .send().await?.text().await?;
         Ok(serde_json::from_str(&event).unwrap())

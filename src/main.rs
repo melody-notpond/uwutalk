@@ -3,29 +3,11 @@ use std::fs;
 use iced::{Application, Settings};
 use tokio::sync::mpsc;
 
-use uwutalk::markdown;
 use uwutalk::chat::MatrixClient;
 use uwutalk::chat_gui::Chat;
 
 #[tokio::main]
 async fn main() -> iced::Result {
-    let markdown = markdown::parse_markdown("> uwu **test** *test2* ***test3*** `my code`
-    > ```rs
-    let (x, mut y) = (2, 3);
-    y += 4;
-    ```
-    __underline__ and ~~strikethrough~~ and ||spoilers||
-    # header 1
-    ## header 2
-    ### header 3
-
-    - bullet point
-        - bullet point
-        ---
-        [my **awesome** link](lauwa.xyz)
-");
-    println!("{:?}", markdown);
-
     let file = fs::read_to_string(".env").unwrap();
     let mut contents = file.split('\n');
     let access_token = contents.next().unwrap();
@@ -43,8 +25,13 @@ async fn main() -> iced::Result {
 
         while let Some(msg) = rx.recv().await {
             match msg {
-                SendMessage(room_id, msg, resp) => {
-                    let _ = resp.send(client.send_message(&room_id, &msg).await);
+                SendMessage(room_id, msg, formatted, resp) => {
+                    let formatted = if formatted == msg {
+                        None
+                    } else {
+                        Some(formatted)
+                    };
+                    let _ = resp.send(client.send_message(&room_id, &msg, formatted.as_ref()).await);
                 }
 
                 ClientSync(next_batch, filter, resp) => {
