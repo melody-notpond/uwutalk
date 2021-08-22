@@ -12,7 +12,7 @@ use super::chat::{Event, SyncState, RoomEvent};
 
 pub enum ClientMessage {
     SendMessage(String, String, oneshot::Sender<Result<Event, Error>>),
-    ClientSync(String, oneshot::Sender<Result<SyncState, Error>>),
+    ClientSync(String, String, oneshot::Sender<Result<SyncState, Error>>),
 }
 
 struct Channel {
@@ -66,7 +66,7 @@ pub enum Message {
 
 pub enum ListenForEvents {
     MessageSend(u64, String, String, mpsc::Sender<ClientMessage>),
-    ClientSync(u64, String, mpsc::Sender<ClientMessage>)
+    ClientSync(u64, String, String, mpsc::Sender<ClientMessage>)
 }
 
 enum SendMessageState {
@@ -77,7 +77,7 @@ enum SendMessageState {
 }
 
 enum SyncClientState {
-    Starting(String, mpsc::Sender<ClientMessage>),
+    Starting(String, String, mpsc::Sender<ClientMessage>),
     Waiting(oneshot::Receiver<Result<SyncState, Error>>),
     Finished(SyncState),
     FinishedForRealsies
@@ -98,9 +98,10 @@ where H: Hasher {
                 msg.hash(state);
             }
 
-            ListenForEvents::ClientSync(euid, next_batch, _) => {
+            ListenForEvents::ClientSync(euid, next_batch, filter, _) => {
                 euid.hash(state);
                 next_batch.hash(state);
+                filter.hash(state);
             }
         }
     }
@@ -136,12 +137,12 @@ where H: Hasher {
                 }))
             }
 
-            ListenForEvents::ClientSync(_, next_batch, tx) => {
-                Box::pin(stream::unfold(SyncClientState::Starting(next_batch, tx), async move |state| {
+            ListenForEvents::ClientSync(_, next_batch, filter, tx) => {
+                Box::pin(stream::unfold(SyncClientState::Starting(next_batch, filter, tx), async move |state| {
                     match state {
-                        SyncClientState::Starting(next_batch, tx) => {
+                        SyncClientState::Starting(next_batch, filter, tx) => {
                             let (oneshot_tx, oneshot_rx) = oneshot::channel();
-                            let message = ClientMessage::ClientSync(next_batch, oneshot_tx);
+                            let message = ClientMessage::ClientSync(next_batch, filter, oneshot_tx);
                             let _ = tx.send(message).await;
                             Some((Message::None, SyncClientState::Waiting(oneshot_rx)))
                         }
@@ -189,8 +190,8 @@ impl Application for Chat {
             Message::Send => {
                 if !self.entry_text.is_empty() {
                     self.event_uid += 1;
-                    if self.entry_text.starts_with("/uwu ") {
-                        self.messages_queue.push_back(uwuify_str_sse(&self.entry_text[5..]));
+                    if let Some(v) = self.entry_text.strip_prefix("/uwu ") {
+                        self.messages_queue.push_back(uwuify_str_sse(v));
                     } else {
                         self.messages_queue.push_back(self.entry_text.clone());
                     }
@@ -209,7 +210,6 @@ impl Application for Chat {
 
                 for (id, joined) in state.rooms.join {
                     if !self.channels_hashed.contains_key(&id) {
-                        println!("id: {}", id);
                         self.channels_hashed.insert(id.clone(), Channel {
                             id: id.clone(),
                             name: match joined.name {
@@ -298,7 +298,7 @@ impl Application for Chat {
         if !self.messages_queue.is_empty() {
             iced::Subscription::from_recipe(ListenForEvents::MessageSend(self.event_uid, self.current_channel.clone(), self.messages_queue.front().unwrap().clone(), self.tx.clone()))
         } else {
-            Subscription::from_recipe(ListenForEvents::ClientSync(self.event_uid, self.next_batch.clone(), self.tx.clone()))
+            Subscription::from_recipe(ListenForEvents::ClientSync(self.event_uid, self.next_batch.clone(), String::from(r#"{"room": {"timeline": {"limit": 50, "types": ["m.room.message"]}}}"#), self.tx.clone()))
         }
     }
 

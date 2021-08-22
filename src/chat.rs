@@ -137,14 +137,16 @@ impl MatrixClient {
         }
     }
 
-    pub async fn get_state(&self, since: Option<String>) -> Result<SyncState, Error> {
+    pub async fn get_state(&self, since: Option<String>, filter: Option<String>) -> Result<SyncState, Error> {
         let mut queries = vec![];
         if let Some(since) = since {
             queries.push(("since", since));
         }
+        if let Some(filter) = filter {
+            queries.push(("filter", filter));
+        }
 
         let state = self.client.get(format!("https://{}/_matrix/client/r0/sync", self.homeserver))
-            //.query(&[("filter", r#"{"room":{"timeline":{"limit":1}}}"#)])
             .query(&queries)
             .bearer_auth(&self.access_code)
             .send().await?.text().await?;
