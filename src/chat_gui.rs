@@ -1,7 +1,8 @@
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hasher;
 
-use iced::{Application, Clipboard, Command, Element, Length, Subscription, executor, widget::*};
+use iced::{Application, Clipboard, Command, Element, Length, Rectangle, Subscription, executor, widget::*};
 use iced_futures::futures::stream::{self, BoxStream};
 use iced_native::subscription::Recipe;
 use tokio::sync::{mpsc, oneshot};
@@ -26,7 +27,7 @@ struct Channel {
 pub struct Chat {
     entry_text: String,
     entry_state: text_input::State,
-    messages_state: scrollable::State,
+    messages_state: HashMap<String, scrollable::State>,
     channels_state: scrollable::State,
     messages_queue: VecDeque<(String, String)>,
     current_channel: String,
@@ -42,7 +43,7 @@ impl Chat {
         Chat {
             entry_text: String::new(),
             entry_state: text_input::State::new(),
-            messages_state: scrollable::State::new(),
+            messages_state: HashMap::new(),
             channels_state: scrollable::State::new(),
             messages_queue: VecDeque::new(),
             current_channel: String::new(),
@@ -242,7 +243,27 @@ impl Application for Chat {
         let entry = TextInput::new(&mut self.entry_state, "Say hello!", &self.entry_text, Message::InputChanged)
             .width(Length::Fill)
             .on_submit(Message::Send);
-        let mut messages = Scrollable::new(&mut self.messages_state)
+        let new = if self.messages_state.get(&self.current_channel).is_none() {
+            self.messages_state.insert(self.current_channel.clone(), scrollable::State::new());
+            true
+        } else {
+            false
+        };
+        let messages_state = self.messages_state.get_mut(&self.current_channel).unwrap();
+        if new {
+            messages_state.scroll_to(1.0, Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            }, Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: f32::MAX,
+            });
+        }
+        let mut messages = Scrollable::new(messages_state)
             .width(Length::Fill)
             .height(Length::Fill)
             .spacing(10);
