@@ -1,4 +1,3 @@
-use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hasher;
 
@@ -18,7 +17,6 @@ pub enum ClientMessage {
 }
 
 struct Channel {
-    id: String,
     name: String,
     button: button::State,
     messages: Vec<RoomEvent>,
@@ -216,7 +214,6 @@ impl Application for Chat {
                 for (id, joined) in state.rooms.join {
                     if !self.channels_hashed.contains_key(&id) {
                         self.channels_hashed.insert(id.clone(), Channel {
-                            id: id.clone(),
                             name: match joined.name {
                                 Some(v) => v,
                                 None => String::from("<unnamed room>")
