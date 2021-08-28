@@ -85,9 +85,9 @@ pub struct JoinedRoom {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct SyncRooms {
-    pub join: HashMap<String, JoinedRoom>,
-    pub invite: HashMap<String, Value>,
-    pub leave: HashMap<String, Value>,
+    pub join: Option<HashMap<String, JoinedRoom>>,
+    pub invite: Option<HashMap<String, Value>>,
+    pub leave: Option<HashMap<String, Value>>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -160,12 +160,14 @@ impl MatrixClient {
         let mut state: SyncState = match serde_json::from_str(&state) {
             Ok(v) => v,
             Err(e) => {
-                panic!("oh no: {}\n{}", e, state);
+                panic!("oh no: {}\n", e);
             }
         };
 
-        for (id, joined) in state.rooms.join.iter_mut() {
-            joined.name = self.get_name(id).await;
+        if let Some(join) = &mut state.rooms.join {
+            for (id, joined) in join.iter_mut() {
+                joined.name = self.get_name(id).await;
+            }
         }
 
         Ok(state)

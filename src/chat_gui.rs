@@ -209,19 +209,21 @@ impl<W> widget::Controller<Chat, W> for ChatController
 
             DruidEvent::Command(cmd) => {
                 if let Some(sync) = cmd.get(SYNC) {
-                    for (id, joined) in sync.rooms.join.iter() {
-                        if !data.channels_hashed.contains_key(id) {
-                            data.channels_hashed.insert(Arc::new(id.clone()), Channel {
-                                id: Arc::new(id.clone()),
-                                name: Arc::new(match &joined.name {
-                                    Some(v) => v.clone(),
-                                    None => String::from("<unnamed room>")
-                                }),
-                                messages: joined.timeline.events.iter().map(make_message).collect(),
-                            });
-                            data.channels.push_back(Arc::new(id.clone()));
-                        } else {
-                            data.channels_hashed.get_mut(id).unwrap().messages.extend(joined.timeline.events.iter().map(make_message));
+                    if let Some(join) = &sync.rooms.join {
+                        for (id, joined) in join.iter() {
+                            if !data.channels_hashed.contains_key(id) {
+                                data.channels_hashed.insert(Arc::new(id.clone()), Channel {
+                                    id: Arc::new(id.clone()),
+                                    name: Arc::new(match &joined.name {
+                                        Some(v) => v.clone(),
+                                        None => String::from("<unnamed room>")
+                                    }),
+                                    messages: joined.timeline.events.iter().map(make_message).collect(),
+                                });
+                                data.channels.push_back(Arc::new(id.clone()));
+                            } else {
+                                data.channels_hashed.get_mut(id).unwrap().messages.extend(joined.timeline.events.iter().map(make_message));
+                            }
                         }
                     }
 
