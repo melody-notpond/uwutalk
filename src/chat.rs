@@ -93,7 +93,7 @@ pub struct SyncRooms {
 #[derive(Deserialize, Debug, Clone)]
 pub struct SyncState {
     pub next_batch: String,
-    pub rooms: SyncRooms,
+    pub rooms: Option<SyncRooms>,
     pub presence: Option<serde_json::Value>,
     pub account_data: Option<serde_json::Value>,
     pub to_device: Option<serde_json::Value>,
@@ -164,9 +164,11 @@ impl MatrixClient {
             }
         };
 
-        if let Some(join) = &mut state.rooms.join {
-            for (id, joined) in join.iter_mut() {
-                joined.name = self.get_name(id).await;
+        if let Some(rooms) = &mut state.rooms {
+            if let Some(join) = &mut rooms.join {
+                for (id, joined) in join.iter_mut() {
+                    joined.name = self.get_name(id).await;
+                }
             }
         }
 
