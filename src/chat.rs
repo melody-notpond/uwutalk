@@ -95,10 +95,10 @@ pub struct SyncState {
     pub next_batch: String,
     pub rooms: SyncRooms,
     pub presence: Option<serde_json::Value>,
-    pub account_data: serde_json::Value,
-    pub to_device: serde_json::Value,
-    pub device_lists: serde_json::Value,
-    pub device_one_time_keys_count: serde_json::Value,
+    pub account_data: Option<serde_json::Value>,
+    pub to_device: Option<serde_json::Value>,
+    pub device_lists: Option<serde_json::Value>,
+    pub device_one_time_keys_count: Option<serde_json::Value>,
 }
 
 impl MatrixClient {
