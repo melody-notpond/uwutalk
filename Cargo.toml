@@ -6,8 +6,9 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-druid = { version = "0.7.0", features = ["im", "svg", "image"] }
+druid = { version = "0.7.0", features = ["im", "image-all", "x11"] }
 reqwest = "0.11.4"
+html_parser = "0.6.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1", features = ["full"] }

@@ -1,14 +1,16 @@
 use std::sync::Arc;
 
 use druid::keyboard_types::Key;
+use druid::text::{Attribute, RichText};
 use druid::widget::{CrossAxisAlignment, FlexParams, LineBreaking, ListIter};
-use druid::{Data, Env, Event as DruidEvent, EventCtx, ImageBuf, Lens, LensExt, Selector, TextAlignment, UnitPoint, Widget, WidgetExt, widget};
+use druid::{Color, Data, Env, Event as DruidEvent, EventCtx, ImageBuf, Lens, LensExt, Selector, TextAlignment, UnitPoint, Widget, WidgetExt, widget};
 use druid::im::{HashMap, Vector};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
+use html_parser::{Dom, Element, Node};
 // use uwuifier::uwuify_str_sse;
 
-use super::chat::SyncState;
+use super::chat::{RoomEvent, SyncState};
 use super::markdown;
 
 pub const SYNC: Selector<SyncState> = Selector::new("uwutalk.matrix.sync");
@@ -30,7 +32,7 @@ struct Message {
     sender: Arc<String>,
     avatar: Arc<ImageBuf>,
     contents: Arc<String>,
-    formatted: Arc<String>,
+    formatted: RichText,
 }
 
 #[derive(Data, Clone, Lens)]
@@ -139,6 +141,55 @@ impl ListIter<(Arc<String>, Channel)> for AllChannels {
     }
 }
 
+fn extract_text_and_text_attributes_from_dom(node: &Node, buffer: &mut String, attrs: &mut Vec<((usize, usize), Element)>) {
+    match node {
+        Node::Text(t) => buffer.push_str(t),
+
+        Node::Element(e) => {
+            let index = attrs.len();
+            attrs.push(((buffer.len(), 0), e.clone()));
+            for child in e.children.iter() {
+                extract_text_and_text_attributes_from_dom(child, buffer, attrs);
+            }
+            attrs[index].0.1 = buffer.len();
+        }
+
+        Node::Comment(_) => (),
+    }
+}
+
+fn make_message(event: &RoomEvent) -> Message {
+    let mut attrs = vec![];
+    let formatted: Arc<str> = match event.content.get("formatted_body") {
+        Some(v) => {
+            let dom = Dom::parse(v.as_str().unwrap()).unwrap();
+            let mut result = String::new();
+            for child in dom.children.iter() {
+                extract_text_and_text_attributes_from_dom(child, &mut result, &mut attrs);
+            }
+            Arc::from(result)
+        }
+
+        None => Arc::from(event.content.get("body").unwrap().as_str().unwrap_or("")),
+    };
+
+    let mut formatted = RichText::new(formatted);
+        formatted.add_attribute(0..1, Attribute::text_color(Color::RED));
+    for ((start, end), attr) in attrs {
+        println!("{:?}: {:?}", start..end, attr);
+    }
+
+    Message {
+        sender: Arc::new(event.sender.clone()),
+        avatar: Arc::new(ImageBuf::empty()),
+        contents: match event.content.get("body") {
+            Some(v) => Arc::new(String::from(v.as_str().unwrap())),
+            None => Arc::new(String::new()),
+        },
+        formatted,
+    }
+}
+
 struct ChatController;
 
 impl<W> widget::Controller<Chat, W> for ChatController
@@ -166,31 +217,11 @@ impl<W> widget::Controller<Chat, W> for ChatController
                                     Some(v) => v.clone(),
                                     None => String::from("<unnamed room>")
                                 }),
-                                messages: joined.timeline.events.iter().map(|v|
-                                    Message {
-                                        sender: Arc::new(v.sender.clone()),
-                                        avatar: Arc::new(ImageBuf::empty()),
-                                        contents: match v.content.get("body") {
-                                            Some(v) => Arc::new(String::from(v.as_str().unwrap())),
-                                            None => Arc::new(String::new()),
-                                        },
-                                        formatted: Arc::new(String::new()),
-                                    }
-                                ).collect(),
+                                messages: joined.timeline.events.iter().map(make_message).collect(),
                             });
                             data.channels.push_back(Arc::new(id.clone()));
                         } else {
-                            data.channels_hashed.get_mut(id).unwrap().messages.extend(joined.timeline.events.iter().map(|v|
-                                    Message {
-                                        sender: Arc::new(v.sender.clone()),
-                                        avatar: Arc::new(ImageBuf::empty()),
-                                        contents: match v.content.get("body") {
-                                            Some(v) => Arc::new(String::from(v.as_str().unwrap())),
-                                            None => Arc::new(String::new()),
-                                        },
-                                        formatted: Arc::new(String::new()),
-                                    }
-                            ));
+                            data.channels_hashed.get_mut(id).unwrap().messages.extend(joined.timeline.events.iter().map(make_message));
                         }
                     }
 
@@ -246,9 +277,10 @@ fn create_channel_listing() -> impl Widget<(Arc<String>, Channel)> {
 }
 
 fn create_message() -> impl Widget<Message> {
-    let contents = widget::Label::dynamic(|v: &Message, _| (*v.contents).clone())
+    let contents = widget::RawLabel::new()
         .with_text_alignment(TextAlignment::Start)
-        .with_line_break_mode(LineBreaking::WordWrap);
+        .with_line_break_mode(LineBreaking::WordWrap)
+        .lens(Message::formatted);
     let sender = widget::Label::dynamic(|v: &Message, _| (*v.sender).clone())
         .with_text_alignment(TextAlignment::Start);
     let column = widget::Flex::column()
