@@ -160,7 +160,7 @@ impl MatrixClient {
         let mut state: SyncState = match serde_json::from_str(&state) {
             Ok(v) => v,
             Err(e) => {
-                panic!("oh no: {}", e);
+                panic!("oh no: {}\n{}", e, state);
             }
         };
 

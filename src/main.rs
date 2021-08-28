@@ -1,13 +1,13 @@
 use std::fs;
 
-use iced::{Application, Settings};
+use druid::{AppLauncher, Target, WindowDesc};
 use tokio::sync::mpsc;
 
 use uwutalk::chat::MatrixClient;
-use uwutalk::chat_gui::Chat;
+use uwutalk::chat_gui::{self, Chat};
 
 #[tokio::main]
-async fn main() -> iced::Result {
+async fn main() {
     let file = fs::read_to_string(".env").unwrap();
     let mut contents = file.split('\n');
     let access_token = contents.next().unwrap();
@@ -18,23 +18,26 @@ async fn main() -> iced::Result {
     //let result = client.get_state(None).await.unwrap();
     //println!("{:#?}", result.rooms.join.iter().next().unwrap().1.timeline);
 
+    let launcher = AppLauncher::with_window(WindowDesc::new(chat_gui::build_ui).window_size((800., 600.)));
+
     let (tx, mut rx) = mpsc::channel(32);
+    let event_sink = launcher.get_external_handle();
 
     let manager = tokio::spawn(async move {
         use uwutalk::chat_gui::ClientMessage::*;
 
         while let Some(msg) = rx.recv().await {
             match msg {
-                SendMessage(room_id, msg, formatted, resp) => {
+                SendMessage(room_id, msg, formatted) => {
                     let formatted = if formatted == msg {
                         None
                     } else {
                         Some(formatted)
                     };
-                    let _ = resp.send(client.send_message(&room_id, &msg, formatted.as_ref()).await);
+                    let _ = client.send_message(&room_id, &msg, formatted.as_ref()).await;
                 }
 
-                ClientSync(next_batch, filter, resp) => {
+                ClientSync(next_batch, filter) => {
                     let next_batch = if next_batch.is_empty() {
                         None
                     } else {
@@ -45,30 +48,15 @@ async fn main() -> iced::Result {
                     } else {
                         Some(filter)
                     };
-                    let _ = resp.send(client.get_state(next_batch, filter).await);
+
+                    if event_sink.submit_command(chat_gui::SYNC, client.get_state(next_batch, filter).await.unwrap(), Target::Global).is_err() {
+                        break;
+                    }
                 }
             }
         }
     });
 
-    Chat::run(Settings {
-        window: iced::window::Settings {
-            size: (800, 600),
-            min_size: Some((400, 300)),
-            max_size: None,
-            resizable: true,
-            decorations: true,
-            transparent: false,
-            always_on_top: false,
-            icon: None,
-        },
-        flags: tx,
-        default_font: None,
-        default_text_size: 16,
-        exit_on_close_request: true,
-        antialiasing: true,
-    })?;
-
+    launcher.launch(Chat::new(tx)).unwrap();
     manager.await.unwrap();
-    Ok(())
 }

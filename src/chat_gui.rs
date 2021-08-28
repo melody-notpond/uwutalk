@@ -1,342 +1,300 @@
-use std::collections::{HashMap, VecDeque};
-use std::hash::Hasher;
+use std::sync::Arc;
 
-use iced::{Application, Clipboard, Command, Element, Length, Rectangle, Subscription, executor, widget::*};
-use iced_futures::futures::stream::{self, BoxStream};
-use iced_native::subscription::Recipe;
-use tokio::sync::{mpsc, oneshot};
-use reqwest::Error;
-use uwuifier::uwuify_str_sse;
+use druid::keyboard_types::Key;
+use druid::widget::{CrossAxisAlignment, FlexParams, LineBreaking, ListIter};
+use druid::{Data, Env, Event as DruidEvent, EventCtx, ImageBuf, Lens, LensExt, Selector, TextAlignment, UnitPoint, Widget, WidgetExt, widget};
+use druid::im::{HashMap, Vector};
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
+// use uwuifier::uwuify_str_sse;
 
-use super::chat::{Event, SyncState, RoomEvent};
+use super::chat::{Event as ChatEvent, SyncState, RoomEvent};
 use super::markdown;
 
+pub const SYNC: Selector<SyncState> = Selector::new("uwutalk.matrix.sync");
+
 pub enum ClientMessage {
-    SendMessage(String, String, String, oneshot::Sender<Result<Event, Error>>),
-    ClientSync(String, String, oneshot::Sender<Result<SyncState, Error>>),
+    SendMessage(String, String, String),
+    ClientSync(String, String),
 }
 
+#[derive(Data, Clone, Lens)]
 struct Channel {
-    name: String,
-    button: button::State,
-    messages: Vec<RoomEvent>,
+    id: Arc<String>,
+    name: Arc<String>,
+    messages: Vector<Message>,
 }
 
+#[derive(Data, Clone, Lens)]
+struct Message {
+    sender: Arc<String>,
+    avatar: Arc<ImageBuf>,
+    contents: Arc<String>,
+    formatted: Arc<String>,
+}
+
+#[derive(Data, Clone, Lens)]
 pub struct Chat {
-    entry_text: String,
-    entry_state: text_input::State,
-    messages_state: HashMap<String, scrollable::State>,
-    channels_state: scrollable::State,
-    messages_queue: VecDeque<(String, String)>,
-    current_channel: String,
-    channels: Vec<String>,
-    channels_hashed: HashMap<String, Channel>,
+    editing_message: Arc<String>,
+    channels_hashed: HashMap<Arc<String>, Channel>,
+    channels: Vector<Arc<String>>,
+    current_channel: Arc<String>,
+
+    #[data(ignore)]
     tx: mpsc::Sender<ClientMessage>,
-    event_uid: u64,
-    next_batch: String,
 }
 
 impl Chat {
-    fn new(tx: mpsc::Sender<ClientMessage>) -> Chat {
+    pub fn new(tx: mpsc::Sender<ClientMessage>) -> Chat {
         Chat {
-            entry_text: String::new(),
-            entry_state: text_input::State::new(),
-            messages_state: HashMap::new(),
-            channels_state: scrollable::State::new(),
-            messages_queue: VecDeque::new(),
-            current_channel: String::new(),
-            channels: Vec::new(),
+            editing_message: Arc::new(String::new()),
             channels_hashed: HashMap::new(),
-            tx,
-            event_uid: 0,
-            next_batch: String::new()
+            channels: Vector::new(),
+            current_channel: Arc::new(String::new()),
+            tx
         }
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum Message {
-    None,
-    InputChanged(String),
-    Send,
-    Dequeue,
-    NewSync(SyncState),
-    ChannelChanged(String)
+struct CurrentChannel {
+    channels_hashed: HashMap<Arc<String>, Channel>,
+    current_channel: Arc<String>,
 }
 
-pub enum ListenForEvents {
-    MessageSend(u64, String, (String, String), mpsc::Sender<ClientMessage>),
-    ClientSync(u64, String, String, mpsc::Sender<ClientMessage>)
-}
+struct CurrentChannelLens;
 
-enum SendMessageState {
-    Starting(String, String, String, mpsc::Sender<ClientMessage>),
-    Waiting(oneshot::Receiver<Result<Event, Error>>),
-    Finished(Event),
-    FinishedForRealsies,
-}
-
-enum SyncClientState {
-    Starting(String, String, mpsc::Sender<ClientMessage>),
-    Waiting(oneshot::Receiver<Result<SyncState, Error>>),
-    Finished(SyncState),
-    FinishedForRealsies
-
-}
-
-impl<H, E> Recipe<H, E> for ListenForEvents
-where H: Hasher {
-    type Output = Message;
-
-    fn hash(&self, state: &mut H) {
-        use std::hash::Hash;
-
-        match self {
-            ListenForEvents::MessageSend(euid, room_id, msg, _) => {
-                euid.hash(state);
-                room_id.hash(state);
-                msg.hash(state);
-            }
-
-            ListenForEvents::ClientSync(euid, next_batch, filter, _) => {
-                euid.hash(state);
-                next_batch.hash(state);
-                filter.hash(state);
-            }
-        }
-    }
-
-    fn stream(
-        self: Box<Self>,
-        _input: BoxStream<E>,
-    ) -> BoxStream<Self::Output> {
-        match *self {
-            ListenForEvents::MessageSend(_, room_id, (msg, formatted), tx) => {
-                Box::pin(stream::unfold(SendMessageState::Starting(room_id, msg, formatted, tx), async move |state| {
-                    match state {
-                        SendMessageState::Starting(room_id, msg, formatted, tx) => {
-                            let (oneshot_tx, oneshot_rx) = oneshot::channel();
-                            let message = ClientMessage::SendMessage(room_id, msg, formatted, oneshot_tx);
-                            let _ = tx.send(message).await;
-                            Some((Message::None, SendMessageState::Waiting(oneshot_rx)))
-                        }
-
-                        SendMessageState::Waiting(rx) => {
-                            match rx.await {
-                                Ok(Ok(v)) => Some((Message::None, SendMessageState::Finished(v))),
-                                _ => None,
-                            }
-                        }
-
-                        SendMessageState::Finished(_) => {
-                            Some((Message::Dequeue, SendMessageState::FinishedForRealsies))
-                        }
-
-                        SendMessageState::FinishedForRealsies => None,
-                    }
-                }))
-            }
-
-            ListenForEvents::ClientSync(_, next_batch, filter, tx) => {
-                Box::pin(stream::unfold(SyncClientState::Starting(next_batch, filter, tx), async move |state| {
-                    match state {
-                        SyncClientState::Starting(next_batch, filter, tx) => {
-                            let (oneshot_tx, oneshot_rx) = oneshot::channel();
-                            let message = ClientMessage::ClientSync(next_batch, filter, oneshot_tx);
-                            let _ = tx.send(message).await;
-                            Some((Message::None, SyncClientState::Waiting(oneshot_rx)))
-                        }
-
-                        SyncClientState::Waiting(rx) => {
-                            match rx.await {
-                                Ok(Ok(v)) => Some((Message::None, SyncClientState::Finished(v))),
-
-                                // TODO: try sending the message again
-                                _ => None
-                            }
-                        }
-
-                        SyncClientState::Finished(v) => {
-                            Some((Message::NewSync(v), SyncClientState::FinishedForRealsies))
-                        }
-
-                        SyncClientState::FinishedForRealsies => None,
-                    }
-                }))
-            }
-        }
-    }
-}
-
-impl Application for Chat {
-    type Executor = executor::Default;
-    type Message = Message;
-    type Flags = mpsc::Sender<ClientMessage>;
-
-    fn new(flags: Self::Flags) -> (Chat, Command<Self::Message>) {
-        (Chat::new(flags), Command::none())
-    }
-
-    fn title(&self) -> String {
-        String::from("uwutalk")
-    }
-
-    fn update(&mut self, message: Self::Message, _clipboard: &mut Clipboard) -> Command<Self::Message> {
-        match message {
-            Message::None => (),
-
-            Message::InputChanged(input) => self.entry_text = input,
-
-            Message::Send => {
-                if !self.entry_text.is_empty() {
-                    self.event_uid += 1;
-                    let entry = if let Some(v) = self.entry_text.strip_prefix("/uwu ") {
-                        uwuify_str_sse(v)
-                    } else {
-                        self.entry_text.clone()
-                    };
-                    let markdown = markdown::parse_markdown(&entry);
-                    let html = markdown::markdown_to_html(markdown);
-                    self.messages_queue.push_back((entry, html));
-
-                    self.entry_text = String::new();
-                }
-            }
-
-            Message::Dequeue => {
-                self.messages_queue.pop_front();
-            }
-
-            Message::NewSync(state) => {
-                self.event_uid += 1;
-                self.next_batch = state.next_batch;
-
-                for (id, joined) in state.rooms.join {
-                    if !self.channels_hashed.contains_key(&id) {
-                        self.channels_hashed.insert(id.clone(), Channel {
-                            name: match joined.name {
-                                Some(v) => v,
-                                None => String::from("<unnamed room>")
-                            },
-                            button: button::State::new(),
-                            messages: joined.timeline.events,
-                        });
-                        self.channels.push(id);
-                    } else {
-                        self.channels_hashed.get_mut(&id).unwrap().messages.extend(joined.timeline.events);
-                    }
-                }
-            }
-
-            Message::ChannelChanged(id) => {
-                self.current_channel = id;
-            }
-        }
-
-        Command::none()
-    }
-
-    fn view(&mut self) -> Element<Self::Message> {
-        let entry = TextInput::new(&mut self.entry_state, "Say hello!", &self.entry_text, Message::InputChanged)
-            .width(Length::Fill)
-            .on_submit(Message::Send);
-        let new = if self.messages_state.get(&self.current_channel).is_none() {
-            self.messages_state.insert(self.current_channel.clone(), scrollable::State::new());
-            true
-        } else {
-            false
+impl Lens<Chat, CurrentChannel> for CurrentChannelLens {
+    fn with<V, F: FnOnce(&CurrentChannel) -> V>(&self, data: &Chat, f: F) -> V {
+        let current = CurrentChannel {
+            channels_hashed: data.channels_hashed.clone(),
+            current_channel: data.current_channel.clone(),
         };
-        let messages_state = self.messages_state.get_mut(&self.current_channel).unwrap();
-        if new {
-            messages_state.scroll_to(1.0, Rectangle {
-                x: 0.0,
-                y: 0.0,
-                width: 1.0,
-                height: 1.0,
-            }, Rectangle {
-                x: 0.0,
-                y: 0.0,
-                width: 1.0,
-                height: f32::MAX,
-            });
-        }
-        let mut messages = Scrollable::new(messages_state)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .spacing(10);
+        f(&current)
+    }
 
-        if let Some(channel) = self.channels_hashed.get(&self.current_channel) {
-            for message in channel.messages.iter() {
-                let content = match message.content.get("body") {
-                    Some(v) => v.as_str().unwrap(),
-                    None => continue,
-                };
-                let avatar = Image::new("avatar.jpg").width(Length::Units(50)).height(Length::Units(50));
-                let display_name = Text::new(message.sender.clone());
-                let message = Text::new(content);
-                let column = Column::new()
-                    .push(display_name)
-                    .push(message);
-                let row = Row::new()
-                    .push(Container::new(avatar))
-                    .push(column)
-                    .spacing(5);
-                messages = messages.push(row);
+    fn with_mut<V, F: FnOnce(&mut CurrentChannel) -> V>(&self, data: &mut Chat, f: F) -> V {
+        let mut current = CurrentChannel {
+            channels_hashed: data.channels_hashed.clone(),
+            current_channel: data.current_channel.clone(),
+        };
+        let v = f(&mut current);
+        data.channels_hashed = current.channels_hashed;
+        data.current_channel = current.current_channel;
+        v
+    }
+}
+
+#[derive(Data, Clone)]
+struct AllChannels {
+    channels_hashed: HashMap<Arc<String>, Channel>,
+    channels: Vector<Arc<String>>,
+    current_channel: Arc<String>,
+}
+
+struct AllChannelsLens;
+
+impl Lens<Chat, AllChannels> for AllChannelsLens {
+    fn with<V, F: FnOnce(&AllChannels) -> V>(&self, data: &Chat, f: F) -> V {
+        let all = AllChannels {
+            channels_hashed: data.channels_hashed.clone(),
+            channels: data.channels.clone(),
+            current_channel: data.current_channel.clone(),
+        };
+        f(&all)
+    }
+
+    fn with_mut<V, F: FnOnce(&mut AllChannels) -> V>(&self, data: &mut Chat, f: F) -> V {
+        let mut all = AllChannels {
+            channels_hashed: data.channels_hashed.clone(),
+            channels: data.channels.clone(),
+            current_channel: data.current_channel.clone(),
+        };
+        let v = f(&mut all);
+        data.channels_hashed = all.channels_hashed;
+        data.channels = all.channels;
+        data.current_channel = all.current_channel;
+        v
+    }
+}
+
+impl ListIter<(Arc<String>, Channel)> for AllChannels {
+    fn for_each(&self, mut cb: impl FnMut(&(Arc<String>, Channel), usize)) {
+        for (i, channel) in self.channels.iter().enumerate() {
+            let val = (self.current_channel.clone(), self.channels_hashed.get(channel).unwrap().clone());
+            cb(&val, i);
+        }
+    }
+
+    fn for_each_mut(&mut self, mut cb: impl FnMut(&mut (Arc<String>, Channel), usize)) {
+        for (i, channel) in self.channels.iter().enumerate() {
+            let mut val = (self.current_channel.clone(), self.channels_hashed.get(channel).unwrap().clone());
+            cb(&mut val, i);
+            self.current_channel = val.0;
+            *self.channels_hashed.get_mut(channel).unwrap() = val.1;
+        }
+    }
+
+    fn data_len(&self) -> usize {
+        self.channels.len()
+    }
+}
+
+struct ChatController;
+
+impl<W> widget::Controller<Chat, W> for ChatController
+    where W: widget::Widget<Chat>
+{
+    fn event(&mut self, child: &mut W, ctx: &mut EventCtx, event: &DruidEvent, data: &mut Chat, env: &Env) {
+        match event {
+            DruidEvent::WindowConnected => {
+                match data.tx.try_send(ClientMessage::ClientSync(String::new(), String::from(r#"{"room": {"timeline": {"limit": 50, "types": ["m.room.message"]}}}"#))) {
+                    Ok(_) => (),
+                    Err(TrySendError::Full(_)) => panic!("idk what to do here :("),
+                    Err(TrySendError::Closed(_)) => panic!("oh no"),
+                }
+
+                child.event(ctx, event, data, env)
             }
+
+            DruidEvent::Command(cmd) => {
+                if let Some(sync) = cmd.get(SYNC) {
+                    for (id, joined) in sync.rooms.join.iter() {
+                        if !data.channels_hashed.contains_key(id) {
+                            data.channels_hashed.insert(Arc::new(id.clone()), Channel {
+                                id: Arc::new(id.clone()),
+                                name: Arc::new(match &joined.name {
+                                    Some(v) => v.clone(),
+                                    None => String::from("<unnamed room>")
+                                }),
+                                messages: joined.timeline.events.iter().map(|v|
+                                    Message {
+                                        sender: Arc::new(v.sender.clone()),
+                                        avatar: Arc::new(ImageBuf::empty()),
+                                        contents: match v.content.get("body") {
+                                            Some(v) => Arc::new(String::from(v.as_str().unwrap())),
+                                            None => Arc::new(String::new()),
+                                        },
+                                        formatted: Arc::new(String::new()),
+                                    }
+                                ).collect(),
+                            });
+                            data.channels.push_back(Arc::new(id.clone()));
+                        } else {
+                            data.channels_hashed.get_mut(id).unwrap().messages.extend(joined.timeline.events.iter().map(|v|
+                                    Message {
+                                        sender: Arc::new(v.sender.clone()),
+                                        avatar: Arc::new(ImageBuf::empty()),
+                                        contents: match v.content.get("body") {
+                                            Some(v) => Arc::new(String::from(v.as_str().unwrap())),
+                                            None => Arc::new(String::new()),
+                                        },
+                                        formatted: Arc::new(String::new()),
+                                    }
+                            ));
+                        }
+                    }
+
+                    match data.tx.try_send(ClientMessage::ClientSync(sync.next_batch.clone(), String::from(r#"{"room": {"timeline": {"limit": 50, "types": ["m.room.message"]}}}"#))) {
+                        Ok(_) => (),
+                        Err(TrySendError::Full(_)) => panic!("idk what to do here :("),
+                        Err(TrySendError::Closed(_)) => panic!("oh no"),
+                    }
+                } else {
+                    child.event(ctx, event, data, env)
+                }
+            }
+
+            _ => child.event(ctx, event, data, env),
+        }
+    }
+}
+
+struct MessageEntryController;
+
+impl<W> widget::Controller<Chat, W> for MessageEntryController
+    where W: Widget<Chat>
+{
+    fn event(&mut self, child: &mut W, ctx: &mut EventCtx, event: &DruidEvent, data: &mut Chat, env: &Env) {
+        match event {
+            DruidEvent::KeyDown(key) if key.key == Key::Enter && !key.mods.shift() => {
+                if !data.editing_message.is_empty() {
+                    let count = data.editing_message.match_indices("```").count();
+                    if count % 2 == 0 {
+                        let formatted = markdown::parse_markdown(&*data.editing_message);
+                        let formatted = markdown::markdown_to_html(formatted);
+                        match data.tx.try_send(ClientMessage::SendMessage((*data.current_channel).clone(), (*data.editing_message).clone(), formatted)) {
+                            Ok(_) => (),
+                            Err(TrySendError::Full(_)) => panic!("idk what to do here :("),
+                            Err(TrySendError::Closed(_)) => panic!("oh no"),
+                        }
+                        Arc::make_mut(&mut data.editing_message).clear();
+                    } else {
+                        child.event(ctx, event, data, env);
+                    }
+                }
+            }
+
+            _ => child.event(ctx, event, data, env),
         }
 
-        let mut channels = Scrollable::new(&mut self.channels_state)
-            .width(Length::Units(200))
-            .height(Length::Fill);
-
-        for (id, channel) in self.channels_hashed.iter_mut() {
-            let name = Text::new(&channel.name);
-            let button = Button::new(&mut channel.button, name)
-                .on_press(Message::ChannelChanged(id.clone()));
-            channels = channels.push(button);
-        }
-
-        let mut right_column = Column::new()
-            .push(messages)
-            .spacing(20);
-
-        if !self.current_channel.is_empty() {
-            right_column = right_column.push(entry);
-        }
-
-        let row = Row::new()
-            .push(channels)
-            .spacing(10)
-            .push(right_column);
-
-        let container = Container::new(row)
-            .padding(5)
-            .width(Length::Fill)
-            .height(Length::Fill);
-        container.into()
     }
+}
 
-    fn subscription(&self) -> Subscription<Self::Message> {
-        if !self.messages_queue.is_empty() {
-            iced::Subscription::from_recipe(ListenForEvents::MessageSend(self.event_uid, self.current_channel.clone(), self.messages_queue.front().unwrap().clone(), self.tx.clone()))
-        } else {
-            Subscription::from_recipe(ListenForEvents::ClientSync(self.event_uid, self.next_batch.clone(), String::from(r#"{"room": {"timeline": {"limit": 50, "types": ["m.room.message"]}}}"#), self.tx.clone()))
-        }
-    }
+fn create_channel_listing() -> impl Widget<(Arc<String>, Channel)> {
+    widget::Button::dynamic(|data: &(Arc<String>, Channel), _| (*data.1.name).clone())
+        .on_click(|_, (current_channel, channel), _| *current_channel = channel.id.clone())
+}
 
-    fn mode(&self) -> iced::window::Mode {
-        iced::window::Mode::Windowed
-    }
+fn create_message() -> impl Widget<Message> {
+    let contents = widget::Label::dynamic(|v: &Message, _| (*v.contents).clone())
+        .with_text_alignment(TextAlignment::Start)
+        .with_line_break_mode(LineBreaking::WordWrap);
+    let sender = widget::Label::dynamic(|v: &Message, _| (*v.sender).clone())
+        .with_text_alignment(TextAlignment::Start);
+    let column = widget::Flex::column()
+        .with_flex_child(sender, FlexParams::new(0.0, CrossAxisAlignment::Start))
+        .with_spacer(2.0)
+        .with_flex_child(contents, FlexParams::new(0.0, CrossAxisAlignment::Start));
+    let avatar = widget::Image::new(ImageBuf::empty())
+        .lens(Message::avatar)
+        .fix_size(50.0, 50.0);
+    let row = widget::Flex::row()
+        .with_child(avatar)
+        .with_spacer(2.0)
+        .with_child(column);
+    widget::Container::new(row)
+}
 
-    fn background_color(&self) -> iced::Color {
-        iced::Color::WHITE
-    }
+pub fn build_ui() -> impl Widget<Chat> {
+    let messages = widget::List::new(create_message)
+        .lens(CurrentChannelLens.map(|v| {
+            if let Some(v) = v.channels_hashed.get(&v.current_channel) {
+                v.messages.clone()
+            } else {
+                Vector::new()
+            }
+        }, |_, _| {}));
+    let messages = widget::Scroll::new(messages)
+        .vertical()
+        .expand();
+    let textbox = widget::TextBox::multiline()
+        .with_placeholder("Say hello!")
+        .lens(Chat::editing_message)
+        .expand_width();
+    let textbox = widget::ControllerHost::new(textbox, MessageEntryController);
+    let textbox = widget::Scroll::new(textbox)
+        .vertical();
+    let right = widget::Flex::column()
+        .with_flex_child(messages, 1.0)
+        .with_flex_child(textbox.align_vertical(UnitPoint::BOTTOM_LEFT), 0.1)
+        .expand_width();
 
-    fn scale_factor(&self) -> f64 {
-        1.0
-    }
-
-    fn should_exit(&self) -> bool {
-        false
-    }
+    let channels = widget::List::new(create_channel_listing)
+        .lens(AllChannelsLens);
+    let channels = widget::Scroll::new(channels)
+        .vertical();
+    let top = widget::Split::columns(channels, right)
+        .split_point(0.2);
+    widget::ControllerHost::new(top, ChatController)
+        // .debug_paint_layout()
 }
