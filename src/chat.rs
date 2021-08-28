@@ -94,7 +94,7 @@ pub struct SyncRooms {
 pub struct SyncState {
     pub next_batch: String,
     pub rooms: SyncRooms,
-    pub presence: serde_json::Value,
+    pub presence: Option<serde_json::Value>,
     pub account_data: serde_json::Value,
     pub to_device: serde_json::Value,
     pub device_lists: serde_json::Value,
