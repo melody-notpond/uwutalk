@@ -170,7 +170,7 @@ fn make_message(event: &RoomEvent) -> Message {
             Arc::from(result)
         }
 
-        None => Arc::from(event.content.get("body").unwrap().as_str().unwrap_or("")),
+        None => Arc::from(event.content.get("body").map(|v| v.as_str().unwrap_or("")).unwrap_or("")),
     };
 
     let mut formatted = RichText::new(formatted);
