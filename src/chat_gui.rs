@@ -3,17 +3,18 @@ use std::sync::Arc;
 use druid::keyboard_types::Key;
 use druid::text::{Attribute, RichText};
 use druid::widget::{CrossAxisAlignment, LineBreaking, ListIter};
-use druid::{Color, Data, Env, Event as DruidEvent, EventCtx, FontFamily, FontStyle, FontWeight, ImageBuf, Lens, LensExt, Selector, TextAlignment, UnitPoint, Widget, WidgetExt, widget};
+use druid::{Color, Data, Env, Event as DruidEvent, EventCtx, FontFamily, FontStyle, FontWeight, ImageBuf, Lens, LensExt, Selector as DruidSelector, TextAlignment, UnitPoint, Widget, WidgetExt, widget};
 use druid::im::{HashMap, Vector};
+use kuchiki::{NodeData, NodeRef};
+use kuchiki::traits::TendrilSink;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
-use html_parser::{Dom, ElementVariant, Node};
 // use uwuifier::uwuify_str_sse;
 
 use super::chat::{RoomEvent, SyncState};
 use super::markdown;
 
-pub const SYNC: Selector<SyncState> = Selector::new("uwutalk.matrix.sync");
+pub const SYNC: DruidSelector<SyncState> = DruidSelector::new("uwutalk.matrix.sync");
 
 pub enum ClientMessage {
     SendMessage(String, String, String),
@@ -143,33 +144,37 @@ impl ListIter<(Arc<String>, Channel)> for AllChannels {
 }
 
 struct Element {
-    id: Option<String>,
     name: String,
-    is_void: bool,
-    attributes: std::collections::HashMap<String, Option<String>>,
-    classes: Vec<String>,
+    attributes: std::collections::HashMap<String, String>,
 }
 
-fn extract_text_and_text_attributes_from_dom(node: &Node, buffer: &mut String, attrs: &mut Vec<((usize, usize), Element)>) {
-    match node {
-        Node::Text(t) => buffer.push_str(t),
+fn extract_text_and_text_attributes_from_dom(node: NodeRef, buffer: &mut String, attrs: &mut Vec<((usize, usize), Element)>) {
+    match node.data() {
+        NodeData::Text(t) => buffer.push_str(&*t.borrow()),
 
-        Node::Element(e) => {
+        NodeData::Element(e) => {
             let index = attrs.len();
             attrs.push(((buffer.len(), 0), Element {
-                id: e.id.clone(),
-                name: e.name.clone(),
-                is_void: matches!(e.variant, ElementVariant::Void),
-                attributes: e.attributes.clone(),
-                classes: e.classes.clone(),
+                name: e.name.local.to_string(),
+                attributes: e.attributes.borrow().map.iter().map(|(name, val)| (name.local.to_string(), val.value.clone())).collect()
             }));
-            for child in e.children.iter() {
+            for child in node.children() {
                 extract_text_and_text_attributes_from_dom(child, buffer, attrs);
             }
             attrs[index].0.1 = buffer.len();
         }
 
-        Node::Comment(_) => (),
+        NodeData::Comment(_) => (),
+        NodeData::ProcessingInstruction(_) => (),
+        NodeData::Doctype(_) => (),
+
+        NodeData::Document(_) => {
+            for child in node.children() {
+                extract_text_and_text_attributes_from_dom(child, buffer, attrs);
+            }
+        }
+
+        NodeData::DocumentFragment => (),
     }
 }
 
@@ -177,9 +182,9 @@ fn make_message(event: &RoomEvent) -> Message {
     let mut attrs = vec![];
     let formatted: Arc<str> = match event.content.get("formatted_body") {
         Some(v) => {
-            let dom = Dom::parse(v.as_str().unwrap()).unwrap();
+            let root = kuchiki::parse_html().one(v.as_str().unwrap());
             let mut result = String::new();
-            for child in dom.children.iter() {
+            for child in root.children() {
                 extract_text_and_text_attributes_from_dom(child, &mut result, &mut attrs);
             }
             Arc::from(result)
