@@ -18,7 +18,7 @@ async fn main() {
     //let result = client.get_state(None).await.unwrap();
     //println!("{:#?}", result.rooms.join.iter().next().unwrap().1.timeline);
 
-    let launcher = AppLauncher::with_window(WindowDesc::new(chat_gui::build_ui).window_size((800., 600.)));
+    let launcher = AppLauncher::with_window(WindowDesc::new(chat_gui::build_ui()).window_size((800., 600.)));
 
     let (tx, mut rx) = mpsc::channel(32);
     let event_sink = launcher.get_external_handle();

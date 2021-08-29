@@ -3,11 +3,11 @@ use std::sync::Arc;
 use druid::keyboard_types::Key;
 use druid::text::{Attribute, RichText};
 use druid::widget::{CrossAxisAlignment, FlexParams, LineBreaking, ListIter};
-use druid::{Color, Data, Env, Event as DruidEvent, EventCtx, ImageBuf, Lens, LensExt, Selector, TextAlignment, UnitPoint, Widget, WidgetExt, widget};
+use druid::{Color, Data, Env, Event as DruidEvent, EventCtx, FontStyle, FontWeight, ImageBuf, Lens, LensExt, Selector, TextAlignment, UnitPoint, Widget, WidgetExt, widget};
 use druid::im::{HashMap, Vector};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
-use html_parser::{Dom, Element, Node};
+use html_parser::{Dom, ElementVariant, Node};
 // use uwuifier::uwuify_str_sse;
 
 use super::chat::{RoomEvent, SyncState};
@@ -31,6 +31,7 @@ struct Channel {
 struct Message {
     sender: Arc<String>,
     avatar: Arc<ImageBuf>,
+    event_id: Arc<String>,
     contents: Arc<String>,
     formatted: RichText,
 }
@@ -141,13 +142,27 @@ impl ListIter<(Arc<String>, Channel)> for AllChannels {
     }
 }
 
+struct Element {
+    id: Option<String>,
+    name: String,
+    is_void: bool,
+    attributes: std::collections::HashMap<String, Option<String>>,
+    classes: Vec<String>,
+}
+
 fn extract_text_and_text_attributes_from_dom(node: &Node, buffer: &mut String, attrs: &mut Vec<((usize, usize), Element)>) {
     match node {
         Node::Text(t) => buffer.push_str(t),
 
         Node::Element(e) => {
             let index = attrs.len();
-            attrs.push(((buffer.len(), 0), e.clone()));
+            attrs.push(((buffer.len(), 0), Element {
+                id: e.id.clone(),
+                name: e.name.clone(),
+                is_void: matches!(e.variant, ElementVariant::Void),
+                attributes: e.attributes.clone(),
+                classes: e.classes.clone(),
+            }));
             for child in e.children.iter() {
                 extract_text_and_text_attributes_from_dom(child, buffer, attrs);
             }
@@ -174,13 +189,29 @@ fn make_message(event: &RoomEvent) -> Message {
     };
 
     let mut formatted = RichText::new(formatted);
-        formatted.add_attribute(.., Attribute::text_color(Color::RED));
     for ((start, end), attr) in attrs {
+        let range = start..end;
+        match attr.name.as_str() {
+            "em" => {
+                formatted.add_attribute(range, Attribute::Style(FontStyle::Italic));
+            }
+
+            "strong" => {
+                formatted.add_attribute(range, Attribute::Weight(FontWeight::new(700)));
+            }
+
+            "u" => {
+                formatted.add_attribute(range, Attribute::Underline(true));
+            }
+
+            _ => (),
+        }
     }
 
     Message {
         sender: Arc::new(event.sender.clone()),
         avatar: Arc::new(ImageBuf::empty()),
+        event_id: Arc::new(event.event_id.clone()),
         contents: match event.content.get("body") {
             Some(v) => Arc::new(String::from(v.as_str().unwrap())),
             None => Arc::new(String::new()),
@@ -285,18 +316,26 @@ fn create_message() -> impl Widget<Message> {
         .lens(Message::formatted);
     let sender = widget::Label::dynamic(|v: &Message, _| (*v.sender).clone())
         .with_text_alignment(TextAlignment::Start);
-    let column = widget::Flex::column()
-        .with_flex_child(sender, FlexParams::new(0.0, CrossAxisAlignment::Start))
+    let mut column = widget::Flex::column()
+        .with_child(sender)
         .with_spacer(2.0)
-        .with_flex_child(contents, FlexParams::new(0.0, CrossAxisAlignment::Start));
+        .with_child(contents);
+    column.set_cross_axis_alignment(CrossAxisAlignment::Start);
     let avatar = widget::Image::new(ImageBuf::empty())
         .lens(Message::avatar)
         .fix_size(50.0, 50.0);
-    let row = widget::Flex::row()
+    let edit_button = widget::Button::new("...")
+        .on_click(|_, data: &mut Message, _| println!("{}", data.event_id))
+        .align_right();
+    let mut row = widget::Flex::row()
         .with_child(avatar)
         .with_spacer(2.0)
-        .with_child(column);
-    widget::Container::new(row)
+        .with_child(column)
+        .with_flex_spacer(1.0)
+        .with_child(edit_button);
+    row.set_cross_axis_alignment(CrossAxisAlignment::Start);
+    widget::Container::new(row.expand_width())
+        .expand_width()
 }
 
 pub fn build_ui() -> impl Widget<Chat> {
