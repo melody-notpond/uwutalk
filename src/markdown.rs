@@ -55,7 +55,7 @@ fn find<'a>(s: &'a str, finding: &str, not_finding: &str, newline_sensitive: boo
     None
 }
 
-fn parse_markdown_helper_helper<'a>(s: &'a str) -> Vec<MarkdownAst<'a>> {
+fn parse_markdown_helper_helper(s: &str) -> Vec<MarkdownAst<'_>> {
     let mut vec = vec![];
     let mut i = 0;
     let mut start = 0;
@@ -81,7 +81,7 @@ fn parse_markdown_helper_helper<'a>(s: &'a str) -> Vec<MarkdownAst<'a>> {
     vec
 }
 
-fn parse_markdown_helper<'a>(s: &'a str, i: usize) -> Option<(MarkdownAst<'a>, usize)> {
+fn parse_markdown_helper(s: &str, i: usize) -> Option<(MarkdownAst<'_>, usize)> {
     let bytes = s.as_bytes();
     let c = bytes[i] as char;
     let len = s.len();
@@ -185,7 +185,7 @@ fn parse_markdown_helper<'a>(s: &'a str, i: usize) -> Option<(MarkdownAst<'a>, u
     }
 }
 
-pub fn parse_markdown<'a>(s: &'a str) -> Vec<MarkdownAst<'a>> {
+pub fn parse_markdown(s: &str) -> Vec<MarkdownAst<'_>> {
     let mut vec = vec![];
     let mut newline = true;
     let mut i = 0;
@@ -419,6 +419,9 @@ pub fn markdown_to_html(asts: Vec<MarkdownAst>) -> String {
         }
 
         let _ = markdown_to_html_helper(&mut s, a);
+    }
+    while depths.pop().is_some() {
+        let _ = write!(s, "</ul>");
     }
     s
 }

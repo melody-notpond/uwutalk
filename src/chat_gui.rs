@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use druid::keyboard_types::Key;
 use druid::text::{Attribute, RichText};
-use druid::widget::{CrossAxisAlignment, FlexParams, LineBreaking, ListIter};
-use druid::{Color, Data, Env, Event as DruidEvent, EventCtx, FontStyle, FontWeight, ImageBuf, Lens, LensExt, Selector, TextAlignment, UnitPoint, Widget, WidgetExt, widget};
+use druid::widget::{CrossAxisAlignment, LineBreaking, ListIter};
+use druid::{Color, Data, Env, Event as DruidEvent, EventCtx, FontFamily, FontStyle, FontWeight, ImageBuf, Lens, LensExt, Selector, TextAlignment, UnitPoint, Widget, WidgetExt, widget};
 use druid::im::{HashMap, Vector};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
@@ -189,19 +189,31 @@ fn make_message(event: &RoomEvent) -> Message {
     };
 
     let mut formatted = RichText::new(formatted);
-    for ((start, end), attr) in attrs {
-        let range = start..end;
+    for ((s, e), attr) in attrs {
         match attr.name.as_str() {
             "em" => {
-                formatted.add_attribute(range, Attribute::Style(FontStyle::Italic));
+                formatted.add_attribute(s..e, Attribute::Style(FontStyle::Italic));
             }
 
             "strong" => {
-                formatted.add_attribute(range, Attribute::Weight(FontWeight::new(700)));
+                formatted.add_attribute(s..e, Attribute::Weight(FontWeight::new(700)));
             }
 
             "u" => {
-                formatted.add_attribute(range, Attribute::Underline(true));
+                formatted.add_attribute(s..e, Attribute::Underline(true));
+            }
+
+            "code" => {
+                formatted.add_attribute(s..e, Attribute::FontFamily(FontFamily::MONOSPACE));
+                formatted.add_attribute(s..e, Attribute::text_color(Color::grey8(200)));
+            }
+
+            "span" if attr.attributes.contains_key("data-mx-spoiler") => {
+                // TODO
+            }
+
+            "a" => {
+                // TODO
             }
 
             _ => (),
