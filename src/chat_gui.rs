@@ -174,9 +174,8 @@ fn make_message(event: &RoomEvent) -> Message {
     };
 
     let mut formatted = RichText::new(formatted);
-        formatted.add_attribute(0..1, Attribute::text_color(Color::RED));
+        formatted.add_attribute(.., Attribute::text_color(Color::RED));
     for ((start, end), attr) in attrs {
-        println!("{:?}: {:?}", start..end, attr);
     }
 
     Message {
@@ -271,7 +270,6 @@ impl<W> widget::Controller<Chat, W> for MessageEntryController
 
             _ => child.event(ctx, event, data, env),
         }
-
     }
 }
 
