@@ -3,7 +3,7 @@ use std::sync::Arc;
 use druid::keyboard_types::Key;
 use druid::text::{Attribute, RichText};
 use druid::widget::{CrossAxisAlignment, LineBreaking, ListIter};
-use druid::{Color, Data, Env, Event as DruidEvent, EventCtx, FontFamily, FontStyle, FontWeight, ImageBuf, Lens, LensExt, Selector as DruidSelector, TextAlignment, UnitPoint, Widget, WidgetExt, widget};
+use druid::{Color, Data, Env, Event as DruidEvent, EventCtx, FontFamily, FontStyle, FontWeight, ImageBuf, Lens, LensExt, Selector as DruidSelector, TextAlignment, Widget, WidgetExt, widget};
 use druid::im::{HashMap, Vector};
 use kuchiki::{NodeData, NodeRef};
 use kuchiki::traits::TendrilSink;
@@ -333,25 +333,29 @@ fn create_message() -> impl Widget<Message> {
         .lens(Message::formatted);
     let sender = widget::Label::dynamic(|v: &Message, _| (*v.sender).clone())
         .with_text_alignment(TextAlignment::Start);
-    let mut column = widget::Flex::column()
+    let edit_button = widget::Button::new("...")
+        .on_click(|_, data: &mut Message, _| println!("{}", data.event_id))
+        .align_right();
+    let mut row = widget::Flex::row()
         .with_child(sender)
+        .with_flex_spacer(1.0)
+        .with_child(edit_button);
+    row.set_cross_axis_alignment(CrossAxisAlignment::Start);
+    let mut column = widget::Flex::column()
+        .with_child(row)
         .with_spacer(2.0)
         .with_child(contents);
     column.set_cross_axis_alignment(CrossAxisAlignment::Start);
     let avatar = widget::Image::new(ImageBuf::empty())
         .lens(Message::avatar)
         .fix_size(50.0, 50.0);
-    let edit_button = widget::Button::new("...")
-        .on_click(|_, data: &mut Message, _| println!("{}", data.event_id))
-        .align_right();
     let mut row = widget::Flex::row()
         .with_child(avatar)
         .with_spacer(2.0)
-        .with_child(column)
-        .with_flex_spacer(1.0)
-        .with_child(edit_button);
+        .with_flex_child(column, 1.0);
     row.set_cross_axis_alignment(CrossAxisAlignment::Start);
-    widget::Container::new(row.expand_width())
+    widget::Container::new(row)
+        .padding(5.0)
         .expand_width()
 }
 
@@ -366,7 +370,7 @@ pub fn build_ui() -> impl Widget<Chat> {
         }, |_, _| {}));
     let messages = widget::Scroll::new(messages)
         .vertical()
-        .expand();
+        .expand_height();
     let textbox = widget::TextBox::multiline()
         .with_placeholder("Say hello!")
         .lens(Chat::editing_message)
@@ -376,8 +380,7 @@ pub fn build_ui() -> impl Widget<Chat> {
         .vertical();
     let right = widget::Flex::column()
         .with_flex_child(messages, 1.0)
-        .with_flex_child(textbox.align_vertical(UnitPoint::BOTTOM_LEFT), 0.1)
-        .expand_width();
+        .with_child(textbox);
 
     let channels = widget::List::new(create_channel_listing)
         .lens(AllChannelsLens);
@@ -386,5 +389,6 @@ pub fn build_ui() -> impl Widget<Chat> {
     let top = widget::Split::columns(channels, right)
         .split_point(0.2);
     widget::ControllerHost::new(top, ChatController)
+        .padding(5.0)
         // .debug_paint_layout()
 }
