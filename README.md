@@ -20,6 +20,7 @@ Matrix client.
      - [ ] Line break thingies
      - [ ]  - Bullet points
      - [ ] > Quote blocks
+     - [ ] Arbitrary html
  - [ ] Messages
      - [ ] Showing user avatars
      - [ ] Showing user nicknames
