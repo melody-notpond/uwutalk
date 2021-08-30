@@ -9,19 +9,20 @@ use kuchiki::traits::TendrilSink;
 use kuchiki::{NodeData, NodeRef};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
+use image::DynamicImage;
 // use uwuifier::uwuify_str_sse;
 
-use super::chat::{Content, RoomEvent, SyncState};
+use super::chat::{RoomEvent, SyncState};
 use super::markdown;
 
 pub const SYNC: Selector<SyncState> = Selector::new("uwutalk.matrix.sync");
-pub const FETCH_DATA: Selector<Content> = Selector::new("uwutalk.matrix.fetch_data");
+pub const FETCH_THUMBNAIL: Selector<DynamicImage> = Selector::new("uwutalk.matrix.fetch_thumbnail");
 
 pub enum ClientMessage {
     Quit,
     SendMessage(String, String, String),
     ClientSync(String, String),
-    FetchData(String, WidgetId),
+    FetchThumbnail(String, WidgetId, u64, u64),
 }
 
 #[derive(Data, Clone, Lens)]
@@ -442,7 +443,7 @@ fn editing_textbox() -> impl Widget<Message> {
 #[derive(Data, Clone, Copy, PartialEq)]
 enum ContentState {
     Text,
-    //Editing,
+    Editing,
     Spinner,
     Image
 }
@@ -456,7 +457,7 @@ impl<W> widget::Controller<Message, W> for MediaController
         match event {
             DruidEvent::Command(cmd) if cmd.is(SYNC) => {
                 if let ImageState::Url(url, width, height) = &data.image {
-                    match data.tx.try_send(ClientMessage::FetchData(url.clone(), ctx.widget_id())) {
+                    match data.tx.try_send(ClientMessage::FetchThumbnail(url.clone(), ctx.widget_id(), *width, *height)) {
                         Ok(_) => (),
                         Err(TrySendError::Full(_)) => panic!("oh no"),
                         Err(TrySendError::Closed(_)) => panic!("oh no"),
@@ -468,8 +469,8 @@ impl<W> widget::Controller<Message, W> for MediaController
                 }
             }
 
-            DruidEvent::Command(cmd) if cmd.is(FETCH_DATA) => {
-                let contents = cmd.get_unchecked(FETCH_DATA);
+            DruidEvent::Command(cmd) if cmd.is(FETCH_THUMBNAIL) => {
+                let image = cmd.get_unchecked(FETCH_THUMBNAIL);
                 let (width, height) = match data.image {
                     ImageState::None => panic!("eeeeee"),
                     ImageState::Url(_, w, h)
@@ -477,8 +478,8 @@ impl<W> widget::Controller<Message, W> for MediaController
                     | ImageState::Image(_, w, h) => (w, h),
                 };
 
-                let image = image::load_from_memory(&contents.content).unwrap().as_rgba8().unwrap().to_vec();
-                data.image = ImageState::Image(Arc::new(ImageBuf::from_raw(Arc::from(image.as_slice()), druid::piet::ImageFormat::RgbaSeparate, width as usize, height as usize)), width, height);
+                let image = Arc::from(image.as_rgba8().unwrap().get(..).unwrap());
+                data.image = ImageState::Image(Arc::new(ImageBuf::from_raw(image, druid::piet::ImageFormat::RgbaSeparate, width as usize, height as usize)), width, height);
                 ctx.set_handled();
             }
 
@@ -489,11 +490,15 @@ impl<W> widget::Controller<Message, W> for MediaController
 
 fn create_message() -> impl Widget<Message> {
     let contents = widget::ViewSwitcher::new(|data: &Message, _| {
-        match data.image {
-            ImageState::None => ContentState::Text,
-            ImageState::Url(_, _, _) => ContentState::Spinner,
-            ImageState::Processing(_, _, _) => ContentState::Spinner,
-            ImageState::Image(_, _, _) => ContentState::Image,
+        if data.editing {
+            ContentState::Editing
+        } else {
+            match data.image {
+                ImageState::None => ContentState::Text,
+                ImageState::Url(_, _, _) => ContentState::Spinner,
+                ImageState::Processing(_, _, _) => ContentState::Spinner,
+                ImageState::Image(_, _, _) => ContentState::Image,
+            }
         }
     }, |state, data, _| {
         match state {
@@ -503,15 +508,16 @@ fn create_message() -> impl Widget<Message> {
                 .lens(Message::formatted)
                 .boxed(),
 
-            //ContentState::Editing => todo!(),
+            ContentState::Editing => editing_textbox()
+                .boxed(),
 
             ContentState::Spinner => widget::Spinner::new()
                 .controller(MediaController)
                 .boxed(),
 
             ContentState::Image => {
-                let (buffer, width, height) = match &data.image {
-                    ImageState::Image(buffer, width, height) => ((**buffer).clone(), *width, *height),
+                let buffer = match &data.image {
+                    ImageState::Image(buffer, _, _) => (**buffer).clone(),
                     _ => panic!("nyaaa :("),
                 };
 
@@ -526,7 +532,6 @@ fn create_message() -> impl Widget<Message> {
         .on_click(|_, data: &mut Message, _| {
             data.editing ^= true;
             if data.editing {
-                println!("{}", data.event_id);
                 data.editing_message = data.contents.clone();
             }
         })

@@ -74,15 +74,20 @@ async fn main() {
                     }
                 }
 
-                FetchData(url, widget) => {
+                FetchThumbnail(url, widget, width, height) => {
                     if let Some(url) = url.strip_prefix("mxc://") {
                         let mut split = url.split('/');
                         let server = split.next().unwrap_or("");
                         let media = split.next().unwrap_or("");
-                        match client.download_mxc(server, media).await {
+                        match client.thumbnail_mxc(server, media, width, height).await {
                             Ok(v) => {
-                                if event_sink.submit_command(chat_gui::FETCH_DATA, v, Target::Widget(widget)).is_err() {
-                                    break;
+                                match image::load_from_memory(&v.content) {
+                                    Ok(v) => {
+                                        if event_sink.submit_command(chat_gui::FETCH_THUMBNAIL, v, Target::Widget(widget)).is_err() {
+                                            break;
+                                        }
+                                    }
+                                    Err(e) => eprintln!("error loading image: {:?}", e),
                                 }
                             }
 

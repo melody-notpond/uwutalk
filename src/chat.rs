@@ -228,15 +228,16 @@ impl MatrixClient {
         Ok(state)
     }
 
-    pub async fn download_mxc(&self, server_name: &str, media_id: &str) -> Result<Content, Error> {
+    pub async fn thumbnail_mxc(&self, server_name: &str, media_id: &str, width: u64, height: u64) -> Result<Content, Error> {
         let mut response = self
             .client
             .get(format!(
-                "https://{}/_matrix/media/r0/download/{}/{}",
+                "https://{}/_matrix/media/r0/thumbnail/{}/{}",
                 self.homeserver,
                 server_name,
                 media_id,
             ))
+            .query(&[("width", width), ("height", height)])
             .send()
             .await?
             .error_for_status()?;
