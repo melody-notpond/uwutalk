@@ -4,13 +4,16 @@ use druid::im::{HashMap, Vector};
 use druid::keyboard_types::Key;
 use druid::text::{Attribute, RichText};
 use druid::widget::{CrossAxisAlignment, LineBreaking, ListIter};
-use druid::{Color, Data, Env, Event, EventCtx, FontFamily, FontStyle, FontWeight, ImageBuf, Lens, LensExt, Selector, TextAlignment, Widget, WidgetExt, WidgetId, widget};
+use druid::{
+    widget, Color, Data, Env, Event, EventCtx, FontFamily, FontStyle, FontWeight, ImageBuf, Lens,
+    LensExt, Selector, TextAlignment, Widget, WidgetExt, WidgetId,
+};
+use image::DynamicImage;
 use kuchiki::traits::TendrilSink;
 use kuchiki::{NodeData, NodeRef};
 use reqwest::Error;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
-use image::DynamicImage;
 // use uwuifier::uwuify_str_sse;
 
 use super::chat::{RoomEvent, SyncState};
@@ -19,7 +22,8 @@ use super::markdown;
 pub const SYNC: Selector<SyncState> = Selector::new("uwutalk.matrix.sync");
 pub const SYNC_FAIL: Selector<Error> = Selector::new("uwutalk.matrix.fail.sync");
 pub const FETCH_THUMBNAIL: Selector<DynamicImage> = Selector::new("uwutalk.matrix.fetch_thumbnail");
-pub const FETCH_THUMBNAIL_FAIL: Selector<Error> = Selector::new("uwutalk.matrix.fail.fetch_thumbnail");
+pub const FETCH_THUMBNAIL_FAIL: Selector<Error> =
+    Selector::new("uwutalk.matrix.fail.fetch_thumbnail");
 
 pub enum ClientMessage {
     Quit,
@@ -369,11 +373,13 @@ where
                                 );
                                 data.channels.push_back(Arc::new(id.clone()));
                             } else {
-                                data.channels_hashed
-                                    .get_mut(id)
-                                    .unwrap()
-                                    .messages
-                                    .extend(joined.timeline.events.iter().map(make_message(data.tx.clone())));
+                                data.channels_hashed.get_mut(id).unwrap().messages.extend(
+                                    joined
+                                        .timeline
+                                        .events
+                                        .iter()
+                                        .map(make_message(data.tx.clone())),
+                                );
                             }
                         }
                     }
@@ -462,19 +468,32 @@ enum ContentState {
     Text,
     Editing,
     Spinner,
-    Image
+    Image,
 }
 
 struct MediaController;
 
 impl<W> widget::Controller<Message, W> for MediaController
-    where W: Widget<Message>
+where
+    W: Widget<Message>,
 {
-    fn event(&mut self, child: &mut W, ctx: &mut EventCtx, event: &Event, data: &mut Message, env: &Env) {
+    fn event(
+        &mut self,
+        child: &mut W,
+        ctx: &mut EventCtx,
+        event: &Event,
+        data: &mut Message,
+        env: &Env,
+    ) {
         match event {
             Event::Command(cmd) if cmd.is(FETCH_THUMBNAIL_FAIL) => {
                 if let ThumbnailState::Url(url, width, height) = &data.image {
-                    match data.tx.try_send(ClientMessage::FetchThumbnail(url.clone(), ctx.widget_id(), *width, *height)) {
+                    match data.tx.try_send(ClientMessage::FetchThumbnail(
+                        url.clone(),
+                        ctx.widget_id(),
+                        *width,
+                        *height,
+                    )) {
                         Ok(_) => (),
                         Err(TrySendError::Full(_)) => panic!("oh no"),
                         Err(TrySendError::Closed(_)) => panic!("oh no"),
@@ -484,7 +503,12 @@ impl<W> widget::Controller<Message, W> for MediaController
 
             Event::Command(cmd) if cmd.is(SYNC) => {
                 if let ThumbnailState::Url(url, width, height) = &data.image {
-                    match data.tx.try_send(ClientMessage::FetchThumbnail(url.clone(), ctx.widget_id(), *width, *height)) {
+                    match data.tx.try_send(ClientMessage::FetchThumbnail(
+                        url.clone(),
+                        ctx.widget_id(),
+                        *width,
+                        *height,
+                    )) {
                         Ok(_) => (),
                         Err(TrySendError::Full(_)) => panic!("oh no"),
                         Err(TrySendError::Closed(_)) => panic!("oh no"),
@@ -506,7 +530,16 @@ impl<W> widget::Controller<Message, W> for MediaController
                 };
 
                 let image = Arc::from(image.as_rgba8().unwrap().get(..).unwrap());
-                data.image = ThumbnailState::Image(Arc::new(ImageBuf::from_raw(image, druid::piet::ImageFormat::RgbaSeparate, width as usize, height as usize)), width, height);
+                data.image = ThumbnailState::Image(
+                    Arc::new(ImageBuf::from_raw(
+                        image,
+                        druid::piet::ImageFormat::RgbaSeparate,
+                        width as usize,
+                        height as usize,
+                    )),
+                    width,
+                    height,
+                );
                 ctx.set_handled();
             }
 
@@ -516,31 +549,29 @@ impl<W> widget::Controller<Message, W> for MediaController
 }
 
 fn create_message() -> impl Widget<Message> {
-    let contents = widget::ViewSwitcher::new(|data: &Message, _| {
-        if data.editing {
-            ContentState::Editing
-        } else {
-            match data.image {
-                ThumbnailState::None => ContentState::Text,
-                ThumbnailState::Url(_, _, _) => ContentState::Spinner,
-                ThumbnailState::Processing(_, _, _) => ContentState::Spinner,
-                ThumbnailState::Image(_, _, _) => ContentState::Image,
+    let contents = widget::ViewSwitcher::new(
+        |data: &Message, _| {
+            if data.editing {
+                ContentState::Editing
+            } else {
+                match data.image {
+                    ThumbnailState::None => ContentState::Text,
+                    ThumbnailState::Url(_, _, _) => ContentState::Spinner,
+                    ThumbnailState::Processing(_, _, _) => ContentState::Spinner,
+                    ThumbnailState::Image(_, _, _) => ContentState::Image,
+                }
             }
-        }
-    }, |state, data, _| {
-        match state {
+        },
+        |state, data, _| match state {
             ContentState::Text => widget::RawLabel::new()
                 .with_text_alignment(TextAlignment::Start)
                 .with_line_break_mode(LineBreaking::WordWrap)
                 .lens(Message::formatted)
                 .boxed(),
 
-            ContentState::Editing => editing_textbox()
-                .boxed(),
+            ContentState::Editing => editing_textbox().boxed(),
 
-            ContentState::Spinner => widget::Spinner::new()
-                .controller(MediaController)
-                .boxed(),
+            ContentState::Spinner => widget::Spinner::new().controller(MediaController).boxed(),
 
             ContentState::Image => {
                 let buffer = match &data.image {
@@ -548,11 +579,10 @@ fn create_message() -> impl Widget<Message> {
                     _ => panic!("nyaaa :("),
                 };
 
-                widget::Image::new(buffer)
-                    .boxed()
+                widget::Image::new(buffer).boxed()
             }
-        }
-    });
+        },
+    );
     let sender = widget::Label::dynamic(|v: &Message, _| (*v.sender).clone())
         .with_text_alignment(TextAlignment::Start);
     let edit_button = widget::Button::new("...")

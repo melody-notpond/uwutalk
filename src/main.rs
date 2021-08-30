@@ -57,11 +57,7 @@ async fn main() {
                     match client.get_state(next_batch, filter).await {
                         Ok(v) => {
                             if event_sink
-                                .submit_command(
-                                    chat_gui::SYNC,
-                                    v,
-                                    Target::Global,
-                                )
+                                .submit_command(chat_gui::SYNC, v, Target::Global)
                                 .is_err()
                             {
                                 break;
@@ -70,11 +66,7 @@ async fn main() {
 
                         Err(e) => {
                             if event_sink
-                                .submit_command(
-                                    chat_gui::SYNC_FAIL,
-                                    e,
-                                    Target::Global,
-                                )
+                                .submit_command(chat_gui::SYNC_FAIL, e, Target::Global)
                                 .is_err()
                             {
                                 break;
@@ -89,19 +81,31 @@ async fn main() {
                         let server = split.next().unwrap_or("");
                         let media = split.next().unwrap_or("");
                         match client.thumbnail_mxc(server, media, width, height).await {
-                            Ok(v) => {
-                                match image::load_from_memory(&v.content) {
-                                    Ok(v) => {
-                                        if event_sink.submit_command(chat_gui::FETCH_THUMBNAIL, v, Target::Widget(widget)).is_err() {
-                                            break;
-                                        }
+                            Ok(v) => match image::load_from_memory(&v.content) {
+                                Ok(v) => {
+                                    if event_sink
+                                        .submit_command(
+                                            chat_gui::FETCH_THUMBNAIL,
+                                            v,
+                                            Target::Widget(widget),
+                                        )
+                                        .is_err()
+                                    {
+                                        break;
                                     }
-                                    Err(e) => eprintln!("error loading image: {:?}", e),
                                 }
-                            }
+                                Err(e) => eprintln!("error loading image: {:?}", e),
+                            },
 
                             Err(e) => {
-                                if event_sink.submit_command(chat_gui::FETCH_THUMBNAIL_FAIL, e, Target::Widget(widget)).is_err() {
+                                if event_sink
+                                    .submit_command(
+                                        chat_gui::FETCH_THUMBNAIL_FAIL,
+                                        e,
+                                        Target::Widget(widget),
+                                    )
+                                    .is_err()
+                                {
                                     break;
                                 }
                             }
