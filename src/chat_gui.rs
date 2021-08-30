@@ -4,9 +4,10 @@ use druid::im::{HashMap, Vector};
 use druid::keyboard_types::Key;
 use druid::text::{Attribute, RichText};
 use druid::widget::{CrossAxisAlignment, LineBreaking, ListIter};
-use druid::{Color, Data, Env, Event as DruidEvent, EventCtx, FontFamily, FontStyle, FontWeight, ImageBuf, Lens, LensExt, Selector, TextAlignment, Widget, WidgetExt, WidgetId, widget};
+use druid::{Color, Data, Env, Event, EventCtx, FontFamily, FontStyle, FontWeight, ImageBuf, Lens, LensExt, Selector, TextAlignment, Widget, WidgetExt, WidgetId, widget};
 use kuchiki::traits::TendrilSink;
 use kuchiki::{NodeData, NodeRef};
+use reqwest::Error;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 use image::DynamicImage;
@@ -16,7 +17,9 @@ use super::chat::{RoomEvent, SyncState};
 use super::markdown;
 
 pub const SYNC: Selector<SyncState> = Selector::new("uwutalk.matrix.sync");
+pub const SYNC_FAIL: Selector<Error> = Selector::new("uwutalk.matrix.fail.sync");
 pub const FETCH_THUMBNAIL: Selector<DynamicImage> = Selector::new("uwutalk.matrix.fetch_thumbnail");
+pub const FETCH_THUMBNAIL_FAIL: Selector<Error> = Selector::new("uwutalk.matrix.fail.fetch_thumbnail");
 
 pub enum ClientMessage {
     Quit,
@@ -33,7 +36,7 @@ struct Channel {
 }
 
 #[derive(Data, Clone)]
-enum ImageState {
+enum ThumbnailState {
     None,
     Url(String, u64, u64),
     Processing(String, u64, u64),
@@ -47,7 +50,7 @@ struct Message {
     event_id: Arc<String>,
     contents: Arc<String>,
     formatted: RichText,
-    image: ImageState,
+    image: ThumbnailState,
     editing_message: Arc<String>,
     editing: bool,
 
@@ -275,10 +278,10 @@ fn make_message(tx: mpsc::Sender<ClientMessage>) -> impl Fn(&RoomEvent) -> Messa
                 let info = event.content.get("info").unwrap();
                 let width = info.get("w").unwrap().as_u64().unwrap();
                 let height = info.get("h").unwrap().as_u64().unwrap();
-                ImageState::Url(String::from(url), width, height)
+                ThumbnailState::Url(String::from(url), width, height)
             }
 
-            _ => ImageState::None,
+            _ => ThumbnailState::None,
         };
 
         let contents = match event.content.get("body") {
@@ -310,12 +313,12 @@ where
         &mut self,
         child: &mut W,
         ctx: &mut EventCtx,
-        event: &DruidEvent,
+        event: &Event,
         data: &mut Chat,
         env: &Env,
     ) {
         match event {
-            DruidEvent::WindowConnected => {
+            Event::WindowConnected => {
                 match data.tx.try_send(ClientMessage::ClientSync(
                     String::new(),
                     String::from(
@@ -328,7 +331,21 @@ where
                 }
             }
 
-            DruidEvent::Command(cmd) if cmd.is(SYNC) => {
+            Event::Command(cmd) if cmd.is(SYNC_FAIL) => {
+                // TODO: something smarter than this
+                match data.tx.try_send(ClientMessage::ClientSync(
+                    String::new(),
+                    String::from(
+                        r#"{"room": {"timeline": {"limit": 50, "types": ["m.room.message"]}}}"#,
+                    ),
+                )) {
+                    Ok(_) => (),
+                    Err(TrySendError::Full(_)) => panic!("idk what to do here :("),
+                    Err(TrySendError::Closed(_)) => panic!("oh no"),
+                }
+            }
+
+            Event::Command(cmd) if cmd.is(SYNC) => {
                 let sync = cmd.get_unchecked(SYNC);
                 if let Some(rooms) = &sync.rooms {
                     if let Some(join) = &rooms.join {
@@ -391,12 +408,12 @@ where
         &mut self,
         child: &mut W,
         ctx: &mut EventCtx,
-        event: &DruidEvent,
+        event: &Event,
         data: &mut Chat,
         env: &Env,
     ) {
         match event {
-            DruidEvent::KeyDown(key) if key.key == Key::Enter && !key.mods.shift() => {
+            Event::KeyDown(key) if key.key == Key::Enter && !key.mods.shift() => {
                 if !data.editing_message.is_empty() {
                     let count = data.editing_message.match_indices("```").count();
                     if count % 2 == 0 {
@@ -419,7 +436,7 @@ where
                 }
             }
 
-            DruidEvent::WindowDisconnected => {
+            Event::WindowDisconnected => {
                 while let Err(TrySendError::Full(_)) = data.tx.try_send(ClientMessage::Quit) {}
             }
 
@@ -453,33 +470,43 @@ struct MediaController;
 impl<W> widget::Controller<Message, W> for MediaController
     where W: Widget<Message>
 {
-    fn event(&mut self, child: &mut W, ctx: &mut EventCtx, event: &DruidEvent, data: &mut Message, env: &Env) {
+    fn event(&mut self, child: &mut W, ctx: &mut EventCtx, event: &Event, data: &mut Message, env: &Env) {
         match event {
-            DruidEvent::Command(cmd) if cmd.is(SYNC) => {
-                if let ImageState::Url(url, width, height) = &data.image {
+            Event::Command(cmd) if cmd.is(FETCH_THUMBNAIL_FAIL) => {
+                if let ThumbnailState::Url(url, width, height) = &data.image {
                     match data.tx.try_send(ClientMessage::FetchThumbnail(url.clone(), ctx.widget_id(), *width, *height)) {
                         Ok(_) => (),
                         Err(TrySendError::Full(_)) => panic!("oh no"),
                         Err(TrySendError::Closed(_)) => panic!("oh no"),
                     }
-                    data.image = ImageState::Processing(url.clone(), *width, *height);
+                }
+            }
+
+            Event::Command(cmd) if cmd.is(SYNC) => {
+                if let ThumbnailState::Url(url, width, height) = &data.image {
+                    match data.tx.try_send(ClientMessage::FetchThumbnail(url.clone(), ctx.widget_id(), *width, *height)) {
+                        Ok(_) => (),
+                        Err(TrySendError::Full(_)) => panic!("oh no"),
+                        Err(TrySendError::Closed(_)) => panic!("oh no"),
+                    }
+                    data.image = ThumbnailState::Processing(url.clone(), *width, *height);
                     ctx.set_handled();
                 } else {
                     child.event(ctx, event, data, env);
                 }
             }
 
-            DruidEvent::Command(cmd) if cmd.is(FETCH_THUMBNAIL) => {
+            Event::Command(cmd) if cmd.is(FETCH_THUMBNAIL) => {
                 let image = cmd.get_unchecked(FETCH_THUMBNAIL);
                 let (width, height) = match data.image {
-                    ImageState::None => panic!("eeeeee"),
-                    ImageState::Url(_, w, h)
-                    | ImageState::Processing(_, w, h)
-                    | ImageState::Image(_, w, h) => (w, h),
+                    ThumbnailState::None => panic!("eeeeee"),
+                    ThumbnailState::Url(_, w, h)
+                    | ThumbnailState::Processing(_, w, h)
+                    | ThumbnailState::Image(_, w, h) => (w, h),
                 };
 
                 let image = Arc::from(image.as_rgba8().unwrap().get(..).unwrap());
-                data.image = ImageState::Image(Arc::new(ImageBuf::from_raw(image, druid::piet::ImageFormat::RgbaSeparate, width as usize, height as usize)), width, height);
+                data.image = ThumbnailState::Image(Arc::new(ImageBuf::from_raw(image, druid::piet::ImageFormat::RgbaSeparate, width as usize, height as usize)), width, height);
                 ctx.set_handled();
             }
 
@@ -494,10 +521,10 @@ fn create_message() -> impl Widget<Message> {
             ContentState::Editing
         } else {
             match data.image {
-                ImageState::None => ContentState::Text,
-                ImageState::Url(_, _, _) => ContentState::Spinner,
-                ImageState::Processing(_, _, _) => ContentState::Spinner,
-                ImageState::Image(_, _, _) => ContentState::Image,
+                ThumbnailState::None => ContentState::Text,
+                ThumbnailState::Url(_, _, _) => ContentState::Spinner,
+                ThumbnailState::Processing(_, _, _) => ContentState::Spinner,
+                ThumbnailState::Image(_, _, _) => ContentState::Image,
             }
         }
     }, |state, data, _| {
@@ -517,7 +544,7 @@ fn create_message() -> impl Widget<Message> {
 
             ContentState::Image => {
                 let buffer = match &data.image {
-                    ImageState::Image(buffer, _, _) => (**buffer).clone(),
+                    ThumbnailState::Image(buffer, _, _) => (**buffer).clone(),
                     _ => panic!("nyaaa :("),
                 };
 

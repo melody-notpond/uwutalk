@@ -25,6 +25,7 @@ Matrix client.
      - [ ] Showing user avatars
      - [ ] Showing user nicknames
      - [X] Receiving images
+     - [ ] Viewing the actual image (ie, not a thumbnail)
      - [ ] Viewing animated images
      - [ ] Sending images
      - [ ] Editing messages
@@ -42,6 +43,7 @@ Matrix client.
      - [ ] Read receipts
      - [ ] Typing indicators
      - [ ] Statuses and presence
+     - [ ] Notifications
  - [ ] Channels
      - [ ] Creating channels
      - [ ] Inviting people

@@ -69,7 +69,16 @@ async fn main() {
                         }
 
                         Err(e) => {
-                            eprintln!("error fetching state: {:?}", e);
+                            if event_sink
+                                .submit_command(
+                                    chat_gui::SYNC_FAIL,
+                                    e,
+                                    Target::Global,
+                                )
+                                .is_err()
+                            {
+                                break;
+                            }
                         }
                     }
                 }
@@ -92,7 +101,9 @@ async fn main() {
                             }
 
                             Err(e) => {
-                                eprintln!("error fetching data: {:?}", e);
+                                if event_sink.submit_command(chat_gui::FETCH_THUMBNAIL_FAIL, e, Target::Widget(widget)).is_err() {
+                                    break;
+                                }
                             }
                         }
                     }
