@@ -16,7 +16,7 @@ Matrix client.
      - [ ] ~~Strikethrough~~ (unsupported in druid; may send pull request later)
      - [ ] ||Spoilers||
      - [ ] # Headings
-     - [ ] [links](https://lauwa.xyz)
+     - [ ] [Links](https://lauwa.xyz)
      - [ ] Line break thingies
      - [ ]  - Bullet points
      - [ ] > Quote blocks
@@ -72,6 +72,9 @@ Matrix client.
      - [ ] Enabling E2EE in a channel
      - [ ] Verifying devices
      - [ ] Seeing other people's devices
+ - [ ] Slash commands
+     - [ ] `/rainbow`
+     - [ ] `/uwu`
  - [ ] Custom stuff
      - [ ] Plurality support
      - [ ] Alt accounts support

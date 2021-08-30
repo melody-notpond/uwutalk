@@ -28,6 +28,8 @@ async fn main() {
 
         while let Some(msg) = rx.recv().await {
             match msg {
+                Quit => break,
+
                 SendMessage(room_id, msg, formatted) => {
                     let formatted = if formatted == msg {
                         None

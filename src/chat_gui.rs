@@ -8,7 +8,7 @@ use druid::im::{HashMap, Vector};
 use kuchiki::{NodeData, NodeRef};
 use kuchiki::traits::TendrilSink;
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::TrySendError;
+use tokio::sync::mpsc::error::{TrySendError};
 // use uwuifier::uwuify_str_sse;
 
 use super::chat::{RoomEvent, SyncState};
@@ -17,6 +17,7 @@ use super::markdown;
 pub const SYNC: DruidSelector<SyncState> = DruidSelector::new("uwutalk.matrix.sync");
 
 pub enum ClientMessage {
+    Quit,
     SendMessage(String, String, String),
     ClientSync(String, String),
 }
@@ -309,11 +310,16 @@ impl<W> widget::Controller<Chat, W> for MessageEntryController
                             Err(TrySendError::Full(_)) => panic!("idk what to do here :("),
                             Err(TrySendError::Closed(_)) => panic!("oh no"),
                         }
-                        Arc::make_mut(&mut data.editing_message).clear();
+                        data.editing_message = Arc::new(String::new());
                     } else {
                         child.event(ctx, event, data, env);
                     }
                 }
+            }
+
+            DruidEvent::WindowDisconnected => {
+                while let Err(TrySendError::Full(_)) = data.tx.try_send(ClientMessage::Quit) { }
+                child.event(ctx, event, data, env);
             }
 
             _ => child.event(ctx, event, data, env),
@@ -333,13 +339,13 @@ fn create_message() -> impl Widget<Message> {
         .lens(Message::formatted);
     let sender = widget::Label::dynamic(|v: &Message, _| (*v.sender).clone())
         .with_text_alignment(TextAlignment::Start);
-    let edit_button = widget::Button::new("...")
+    let more_button = widget::Button::new("...")
         .on_click(|_, data: &mut Message, _| println!("{}", data.event_id))
         .align_right();
     let mut row = widget::Flex::row()
         .with_child(sender)
         .with_flex_spacer(1.0)
-        .with_child(edit_button);
+        .with_child(more_button);
     row.set_cross_axis_alignment(CrossAxisAlignment::Start);
     let mut column = widget::Flex::column()
         .with_child(row)
