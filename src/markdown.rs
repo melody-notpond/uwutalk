@@ -14,14 +14,14 @@ pub enum MarkdownAst<'a> {
     Quotes(Vec<MarkdownAst<'a>>),
     Spoiler(Vec<MarkdownAst<'a>>),
     Link(Vec<MarkdownAst<'a>>, &'a str),
-    Line
+    Line,
 }
 
 impl<'a> MarkdownAst<'a> {
     fn get_vec(&mut self) -> &mut Vec<MarkdownAst<'a>> {
         match self {
             MarkdownAst::Text(_) => panic!(),
-            | MarkdownAst::Bold(v)
+            MarkdownAst::Bold(v)
             | MarkdownAst::Italics(v)
             | MarkdownAst::BulletPoint(_, v)
             | MarkdownAst::Header(_, v)
@@ -31,14 +31,19 @@ impl<'a> MarkdownAst<'a> {
             | MarkdownAst::Spoiler(v)
             | MarkdownAst::Link(v, _) => v,
 
-            MarkdownAst::Code(_)
-            | MarkdownAst::Codeblock(_, _)
-            | MarkdownAst::Line => panic!("unsupported"),
+            MarkdownAst::Code(_) | MarkdownAst::Codeblock(_, _) | MarkdownAst::Line => {
+                panic!("unsupported")
+            }
         }
     }
 }
 
-fn find<'a>(s: &'a str, finding: &str, not_finding: &str, newline_sensitive: bool) -> Option<&'a str> {
+fn find<'a>(
+    s: &'a str,
+    finding: &str,
+    not_finding: &str,
+    newline_sensitive: bool,
+) -> Option<&'a str> {
     let mut merged = String::with_capacity(finding.len() + not_finding.len());
     merged.push_str(finding);
     merged.push_str(not_finding);
@@ -47,7 +52,12 @@ fn find<'a>(s: &'a str, finding: &str, not_finding: &str, newline_sensitive: boo
             return None;
         }
 
-        if (not_finding.is_empty() || !s[i..].starts_with(not_finding) || s[i..].starts_with(&merged)) && s[i..].starts_with(finding) && (finding.len() == 1 || !s[i + 1..].starts_with(finding)) {
+        if (not_finding.is_empty()
+            || !s[i..].starts_with(not_finding)
+            || s[i..].starts_with(&merged))
+            && s[i..].starts_with(finding)
+            && (finding.len() == 1 || !s[i + 1..].starts_with(finding))
+        {
             return Some(&s[..i]);
         }
     }
@@ -102,7 +112,7 @@ fn parse_markdown_helper(s: &str, i: usize) -> Option<(MarkdownAst<'_>, usize)> 
             } else {
                 None
             }
-        },
+        }
 
         '_' if len > 2 && i < len - 2 && bytes[i + 1] == b'_' => {
             if let Some(sub) = find(&s[i + 2..], "__", "", true) {
@@ -220,7 +230,10 @@ pub fn parse_markdown(s: &str) -> Vec<MarkdownAst<'_>> {
                 }
 
                 '-' if len > 2 && i < len - 2 && bytes[i + 1] == b'-' && bytes[i + 2] == b'-' => {
-                    match (s[i + 3..].find('\n'), s[i + 3..].find(|v: char| !v.is_whitespace())) {
+                    match (
+                        s[i + 3..].find('\n'),
+                        s[i + 3..].find(|v: char| !v.is_whitespace()),
+                    ) {
                         (Some(jj), Some(kk)) if jj < kk => {
                             i += jj + 4;
                             start = i;

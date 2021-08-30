@@ -18,7 +18,8 @@ async fn main() {
     //let result = client.get_state(None).await.unwrap();
     //println!("{:#?}", result.rooms.join.iter().next().unwrap().1.timeline);
 
-    let launcher = AppLauncher::with_window(WindowDesc::new(chat_gui::build_ui()).window_size((800., 600.)));
+    let launcher =
+        AppLauncher::with_window(WindowDesc::new(chat_gui::build_ui()).window_size((800., 600.)));
 
     let (tx, mut rx) = mpsc::channel(32);
     let event_sink = launcher.get_external_handle();
@@ -36,7 +37,9 @@ async fn main() {
                     } else {
                         Some(formatted)
                     };
-                    let _ = client.send_message(&room_id, &msg, formatted.as_ref()).await;
+                    let _ = client
+                        .send_message(&room_id, &msg, formatted.as_ref())
+                        .await;
                 }
 
                 ClientSync(next_batch, filter) => {
@@ -51,7 +54,14 @@ async fn main() {
                         Some(filter)
                     };
 
-                    if event_sink.submit_command(chat_gui::SYNC, client.get_state(next_batch, filter).await.unwrap(), Target::Global).is_err() {
+                    if event_sink
+                        .submit_command(
+                            chat_gui::SYNC,
+                            client.get_state(next_batch, filter).await.unwrap(),
+                            Target::Global,
+                        )
+                        .is_err()
+                    {
                         break;
                     }
                 }

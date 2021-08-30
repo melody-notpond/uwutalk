@@ -1,14 +1,17 @@
 use std::sync::Arc;
 
+use druid::im::{HashMap, Vector};
 use druid::keyboard_types::Key;
 use druid::text::{Attribute, RichText};
 use druid::widget::{CrossAxisAlignment, LineBreaking, ListIter};
-use druid::{Color, Data, Env, Event as DruidEvent, EventCtx, FontFamily, FontStyle, FontWeight, ImageBuf, Lens, LensExt, Selector as DruidSelector, TextAlignment, Widget, WidgetExt, widget};
-use druid::im::{HashMap, Vector};
-use kuchiki::{NodeData, NodeRef};
+use druid::{
+    widget, Color, Data, Env, Event as DruidEvent, EventCtx, FontFamily, FontStyle, FontWeight,
+    ImageBuf, Lens, LensExt, Selector as DruidSelector, TextAlignment, Widget, WidgetExt,
+};
 use kuchiki::traits::TendrilSink;
+use kuchiki::{NodeData, NodeRef};
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::{TrySendError};
+use tokio::sync::mpsc::error::TrySendError;
 // use uwuifier::uwuify_str_sse;
 
 use super::chat::{RoomEvent, SyncState};
@@ -56,7 +59,7 @@ impl Chat {
             channels_hashed: HashMap::new(),
             channels: Vector::new(),
             current_channel: Arc::new(String::new()),
-            tx
+            tx,
         }
     }
 }
@@ -125,14 +128,20 @@ impl Lens<Chat, AllChannels> for AllChannelsLens {
 impl ListIter<(Arc<String>, Channel)> for AllChannels {
     fn for_each(&self, mut cb: impl FnMut(&(Arc<String>, Channel), usize)) {
         for (i, channel) in self.channels.iter().enumerate() {
-            let val = (self.current_channel.clone(), self.channels_hashed.get(channel).unwrap().clone());
+            let val = (
+                self.current_channel.clone(),
+                self.channels_hashed.get(channel).unwrap().clone(),
+            );
             cb(&val, i);
         }
     }
 
     fn for_each_mut(&mut self, mut cb: impl FnMut(&mut (Arc<String>, Channel), usize)) {
         for (i, channel) in self.channels.iter().enumerate() {
-            let mut val = (self.current_channel.clone(), self.channels_hashed.get(channel).unwrap().clone());
+            let mut val = (
+                self.current_channel.clone(),
+                self.channels_hashed.get(channel).unwrap().clone(),
+            );
             cb(&mut val, i);
             self.current_channel = val.0;
             *self.channels_hashed.get_mut(channel).unwrap() = val.1;
@@ -149,20 +158,33 @@ struct Element {
     attributes: std::collections::HashMap<String, String>,
 }
 
-fn extract_text_and_text_attributes_from_dom(node: NodeRef, buffer: &mut String, attrs: &mut Vec<((usize, usize), Element)>) {
+fn extract_text_and_text_attributes_from_dom(
+    node: NodeRef,
+    buffer: &mut String,
+    attrs: &mut Vec<((usize, usize), Element)>,
+) {
     match node.data() {
         NodeData::Text(t) => buffer.push_str(&*t.borrow()),
 
         NodeData::Element(e) => {
             let index = attrs.len();
-            attrs.push(((buffer.len(), 0), Element {
-                name: e.name.local.to_string(),
-                attributes: e.attributes.borrow().map.iter().map(|(name, val)| (name.local.to_string(), val.value.clone())).collect()
-            }));
+            attrs.push((
+                (buffer.len(), 0),
+                Element {
+                    name: e.name.local.to_string(),
+                    attributes: e
+                        .attributes
+                        .borrow()
+                        .map
+                        .iter()
+                        .map(|(name, val)| (name.local.to_string(), val.value.clone()))
+                        .collect(),
+                },
+            ));
             for child in node.children() {
                 extract_text_and_text_attributes_from_dom(child, buffer, attrs);
             }
-            attrs[index].0.1 = buffer.len();
+            attrs[index].0 .1 = buffer.len();
         }
 
         NodeData::Comment(_) => (),
@@ -191,7 +213,13 @@ fn make_message(event: &RoomEvent) -> Message {
             Arc::from(result)
         }
 
-        None => Arc::from(event.content.get("body").map(|v| v.as_str().unwrap_or("")).unwrap_or("")),
+        None => Arc::from(
+            event
+                .content
+                .get("body")
+                .map(|v| v.as_str().unwrap_or(""))
+                .unwrap_or(""),
+        ),
     };
 
     let mut formatted = RichText::new(formatted);
@@ -241,12 +269,25 @@ fn make_message(event: &RoomEvent) -> Message {
 struct ChatController;
 
 impl<W> widget::Controller<Chat, W> for ChatController
-    where W: widget::Widget<Chat>
+where
+    W: widget::Widget<Chat>,
 {
-    fn event(&mut self, child: &mut W, ctx: &mut EventCtx, event: &DruidEvent, data: &mut Chat, env: &Env) {
+    fn event(
+        &mut self,
+        child: &mut W,
+        ctx: &mut EventCtx,
+        event: &DruidEvent,
+        data: &mut Chat,
+        env: &Env,
+    ) {
         match event {
             DruidEvent::WindowConnected => {
-                match data.tx.try_send(ClientMessage::ClientSync(String::new(), String::from(r#"{"room": {"timeline": {"limit": 50, "types": ["m.room.message"]}}}"#))) {
+                match data.tx.try_send(ClientMessage::ClientSync(
+                    String::new(),
+                    String::from(
+                        r#"{"room": {"timeline": {"limit": 50, "types": ["m.room.message"]}}}"#,
+                    ),
+                )) {
                     Ok(_) => (),
                     Err(TrySendError::Full(_)) => panic!("idk what to do here :("),
                     Err(TrySendError::Closed(_)) => panic!("oh no"),
@@ -261,23 +302,40 @@ impl<W> widget::Controller<Chat, W> for ChatController
                         if let Some(join) = &rooms.join {
                             for (id, joined) in join.iter() {
                                 if !data.channels_hashed.contains_key(id) {
-                                    data.channels_hashed.insert(Arc::new(id.clone()), Channel {
-                                        id: Arc::new(id.clone()),
-                                        name: Arc::new(match &joined.name {
-                                            Some(v) => v.clone(),
-                                            None => String::from("<unnamed room>")
-                                        }),
-                                        messages: joined.timeline.events.iter().map(make_message).collect(),
-                                    });
+                                    data.channels_hashed.insert(
+                                        Arc::new(id.clone()),
+                                        Channel {
+                                            id: Arc::new(id.clone()),
+                                            name: Arc::new(match &joined.name {
+                                                Some(v) => v.clone(),
+                                                None => String::from("<unnamed room>"),
+                                            }),
+                                            messages: joined
+                                                .timeline
+                                                .events
+                                                .iter()
+                                                .map(make_message)
+                                                .collect(),
+                                        },
+                                    );
                                     data.channels.push_back(Arc::new(id.clone()));
                                 } else {
-                                    data.channels_hashed.get_mut(id).unwrap().messages.extend(joined.timeline.events.iter().map(make_message));
+                                    data.channels_hashed
+                                        .get_mut(id)
+                                        .unwrap()
+                                        .messages
+                                        .extend(joined.timeline.events.iter().map(make_message));
                                 }
                             }
                         }
                     }
 
-                    match data.tx.try_send(ClientMessage::ClientSync(sync.next_batch.clone(), String::from(r#"{"room": {"timeline": {"limit": 50, "types": ["m.room.message"]}}}"#))) {
+                    match data.tx.try_send(ClientMessage::ClientSync(
+                        sync.next_batch.clone(),
+                        String::from(
+                            r#"{"room": {"timeline": {"limit": 50, "types": ["m.room.message"]}}}"#,
+                        ),
+                    )) {
                         Ok(_) => (),
                         Err(TrySendError::Full(_)) => panic!("idk what to do here :("),
                         Err(TrySendError::Closed(_)) => panic!("oh no"),
@@ -295,9 +353,17 @@ impl<W> widget::Controller<Chat, W> for ChatController
 struct MessageEntryController;
 
 impl<W> widget::Controller<Chat, W> for MessageEntryController
-    where W: Widget<Chat>
+where
+    W: Widget<Chat>,
 {
-    fn event(&mut self, child: &mut W, ctx: &mut EventCtx, event: &DruidEvent, data: &mut Chat, env: &Env) {
+    fn event(
+        &mut self,
+        child: &mut W,
+        ctx: &mut EventCtx,
+        event: &DruidEvent,
+        data: &mut Chat,
+        env: &Env,
+    ) {
         match event {
             DruidEvent::KeyDown(key) if key.key == Key::Enter && !key.mods.shift() => {
                 if !data.editing_message.is_empty() {
@@ -305,7 +371,11 @@ impl<W> widget::Controller<Chat, W> for MessageEntryController
                     if count % 2 == 0 {
                         let formatted = markdown::parse_markdown(&*data.editing_message);
                         let formatted = markdown::markdown_to_html(formatted);
-                        match data.tx.try_send(ClientMessage::SendMessage((*data.current_channel).clone(), (*data.editing_message).clone(), formatted)) {
+                        match data.tx.try_send(ClientMessage::SendMessage(
+                            (*data.current_channel).clone(),
+                            (*data.editing_message).clone(),
+                            formatted,
+                        )) {
                             Ok(_) => (),
                             Err(TrySendError::Full(_)) => panic!("idk what to do here :("),
                             Err(TrySendError::Closed(_)) => panic!("oh no"),
@@ -318,7 +388,7 @@ impl<W> widget::Controller<Chat, W> for MessageEntryController
             }
 
             DruidEvent::WindowDisconnected => {
-                while let Err(TrySendError::Full(_)) = data.tx.try_send(ClientMessage::Quit) { }
+                while let Err(TrySendError::Full(_)) = data.tx.try_send(ClientMessage::Quit) {}
                 child.event(ctx, event, data, env);
             }
 
@@ -360,41 +430,34 @@ fn create_message() -> impl Widget<Message> {
         .with_spacer(2.0)
         .with_flex_child(column, 1.0);
     row.set_cross_axis_alignment(CrossAxisAlignment::Start);
-    widget::Container::new(row)
-        .padding(5.0)
-        .expand_width()
+    widget::Container::new(row).padding(5.0).expand_width()
 }
 
 pub fn build_ui() -> impl Widget<Chat> {
-    let messages = widget::List::new(create_message)
-        .lens(CurrentChannelLens.map(|v| {
+    let messages = widget::List::new(create_message).lens(CurrentChannelLens.map(
+        |v| {
             if let Some(v) = v.channels_hashed.get(&v.current_channel) {
                 v.messages.clone()
             } else {
                 Vector::new()
             }
-        }, |_, _| {}));
-    let messages = widget::Scroll::new(messages)
-        .vertical()
-        .expand_height();
+        },
+        |_, _| {},
+    ));
+    let messages = widget::Scroll::new(messages).vertical().expand_height();
     let textbox = widget::TextBox::multiline()
         .with_placeholder("Say hello!")
         .lens(Chat::editing_message)
         .expand_width();
     let textbox = widget::ControllerHost::new(textbox, MessageEntryController);
-    let textbox = widget::Scroll::new(textbox)
-        .vertical();
+    let textbox = widget::Scroll::new(textbox).vertical();
     let right = widget::Flex::column()
         .with_flex_child(messages, 1.0)
         .with_child(textbox);
 
-    let channels = widget::List::new(create_channel_listing)
-        .lens(AllChannelsLens);
-    let channels = widget::Scroll::new(channels)
-        .vertical();
-    let top = widget::Split::columns(channels, right)
-        .split_point(0.2);
-    widget::ControllerHost::new(top, ChatController)
-        .padding(5.0)
-        // .debug_paint_layout()
+    let channels = widget::List::new(create_channel_listing).lens(AllChannelsLens);
+    let channels = widget::Scroll::new(channels).vertical();
+    let top = widget::Split::columns(channels, right).split_point(0.2);
+    widget::ControllerHost::new(top, ChatController).padding(5.0)
+    // .debug_paint_layout()
 }
