@@ -381,19 +381,20 @@ where
                             Err(TrySendError::Closed(_)) => panic!("oh no"),
                         }
                         data.editing_message = Arc::new(String::new());
-                    } else {
-                        child.event(ctx, event, data, env);
+                        ctx.set_handled();
                     }
+                } else {
+                    ctx.set_handled();
                 }
             }
 
             DruidEvent::WindowDisconnected => {
                 while let Err(TrySendError::Full(_)) = data.tx.try_send(ClientMessage::Quit) {}
-                child.event(ctx, event, data, env);
             }
 
-            _ => child.event(ctx, event, data, env),
+            _ => (),
         }
+        child.event(ctx, event, data, env);
     }
 }
 
