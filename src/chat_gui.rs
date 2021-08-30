@@ -4,25 +4,24 @@ use druid::im::{HashMap, Vector};
 use druid::keyboard_types::Key;
 use druid::text::{Attribute, RichText};
 use druid::widget::{CrossAxisAlignment, LineBreaking, ListIter};
-use druid::{
-    widget, Color, Data, Env, Event as DruidEvent, EventCtx, FontFamily, FontStyle, FontWeight,
-    ImageBuf, Lens, LensExt, Selector as DruidSelector, TextAlignment, Widget, WidgetExt,
-};
+use druid::{Color, Data, Env, Event as DruidEvent, EventCtx, FontFamily, FontStyle, FontWeight, ImageBuf, Lens, LensExt, Selector, TextAlignment, Widget, WidgetExt, WidgetId, widget};
 use kuchiki::traits::TendrilSink;
 use kuchiki::{NodeData, NodeRef};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 // use uwuifier::uwuify_str_sse;
 
-use super::chat::{RoomEvent, SyncState};
+use super::chat::{Content, RoomEvent, SyncState};
 use super::markdown;
 
-pub const SYNC: DruidSelector<SyncState> = DruidSelector::new("uwutalk.matrix.sync");
+pub const SYNC: Selector<SyncState> = Selector::new("uwutalk.matrix.sync");
+pub const FETCH_DATA: Selector<Content> = Selector::new("uwutalk.matrix.fetch_data");
 
 pub enum ClientMessage {
     Quit,
     SendMessage(String, String, String),
     ClientSync(String, String),
+    FetchData(String, WidgetId),
 }
 
 #[derive(Data, Clone, Lens)]
@@ -32,6 +31,14 @@ struct Channel {
     messages: Vector<Message>,
 }
 
+#[derive(Data, Clone)]
+enum ImageState {
+    None,
+    Url(String, u64, u64),
+    Processing(String, u64, u64),
+    Image(Arc<ImageBuf>, u64, u64),
+}
+
 #[derive(Data, Clone, Lens)]
 struct Message {
     sender: Arc<String>,
@@ -39,6 +46,12 @@ struct Message {
     event_id: Arc<String>,
     contents: Arc<String>,
     formatted: RichText,
+    image: ImageState,
+    editing_message: Arc<String>,
+    editing: bool,
+
+    #[data(ignore)]
+    tx: mpsc::Sender<ClientMessage>,
 }
 
 #[derive(Data, Clone, Lens)]
@@ -201,68 +214,88 @@ fn extract_text_and_text_attributes_from_dom(
     }
 }
 
-fn make_message(event: &RoomEvent) -> Message {
-    let mut attrs = vec![];
-    let formatted: Arc<str> = match event.content.get("formatted_body") {
-        Some(v) => {
-            let root = kuchiki::parse_html().one(v.as_str().unwrap());
-            let mut result = String::new();
-            for child in root.children() {
-                extract_text_and_text_attributes_from_dom(child, &mut result, &mut attrs);
+fn make_message(tx: mpsc::Sender<ClientMessage>) -> impl Fn(&RoomEvent) -> Message {
+    move |event: &RoomEvent| {
+        let mut attrs = vec![];
+        let formatted: Arc<str> = match event.content.get("formatted_body") {
+            Some(v) => {
+                let root = kuchiki::parse_html().one(v.as_str().unwrap());
+                let mut result = String::new();
+                for child in root.children() {
+                    extract_text_and_text_attributes_from_dom(child, &mut result, &mut attrs);
+                }
+                Arc::from(result)
             }
-            Arc::from(result)
+
+            None => Arc::from(
+                event
+                    .content
+                    .get("body")
+                    .map(|v| v.as_str().unwrap_or(""))
+                    .unwrap_or(""),
+            ),
+        };
+
+        let mut formatted = RichText::new(formatted);
+        for ((s, e), attr) in attrs {
+            match attr.name.as_str() {
+                "em" => {
+                    formatted.add_attribute(s..e, Attribute::Style(FontStyle::Italic));
+                }
+
+                "strong" => {
+                    formatted.add_attribute(s..e, Attribute::Weight(FontWeight::new(700)));
+                }
+
+                "u" => {
+                    formatted.add_attribute(s..e, Attribute::Underline(true));
+                }
+
+                "code" => {
+                    formatted.add_attribute(s..e, Attribute::FontFamily(FontFamily::MONOSPACE));
+                    formatted.add_attribute(s..e, Attribute::text_color(Color::grey8(200)));
+                }
+
+                "span" if attr.attributes.contains_key("data-mx-spoiler") => {
+                    // TODO
+                }
+
+                "a" => {
+                    // TODO
+                }
+
+                _ => (),
+            }
         }
 
-        None => Arc::from(
-            event
-                .content
-                .get("body")
-                .map(|v| v.as_str().unwrap_or(""))
-                .unwrap_or(""),
-        ),
-    };
-
-    let mut formatted = RichText::new(formatted);
-    for ((s, e), attr) in attrs {
-        match attr.name.as_str() {
-            "em" => {
-                formatted.add_attribute(s..e, Attribute::Style(FontStyle::Italic));
+        let image = match event.content.get("msgtype") {
+            Some(v) if matches!(v.as_str(), Some("m.image")) => {
+                let url = event.content.get("url").unwrap().as_str().unwrap();
+                let info = event.content.get("info").unwrap();
+                let width = info.get("w").unwrap().as_u64().unwrap();
+                let height = info.get("h").unwrap().as_u64().unwrap();
+                ImageState::Url(String::from(url), width, height)
             }
 
-            "strong" => {
-                formatted.add_attribute(s..e, Attribute::Weight(FontWeight::new(700)));
-            }
+            _ => ImageState::None,
+        };
 
-            "u" => {
-                formatted.add_attribute(s..e, Attribute::Underline(true));
-            }
-
-            "code" => {
-                formatted.add_attribute(s..e, Attribute::FontFamily(FontFamily::MONOSPACE));
-                formatted.add_attribute(s..e, Attribute::text_color(Color::grey8(200)));
-            }
-
-            "span" if attr.attributes.contains_key("data-mx-spoiler") => {
-                // TODO
-            }
-
-            "a" => {
-                // TODO
-            }
-
-            _ => (),
-        }
-    }
-
-    Message {
-        sender: Arc::new(event.sender.clone()),
-        avatar: Arc::new(ImageBuf::empty()),
-        event_id: Arc::new(event.event_id.clone()),
-        contents: match event.content.get("body") {
+        let contents = match event.content.get("body") {
             Some(v) => Arc::new(String::from(v.as_str().unwrap())),
             None => Arc::new(String::new()),
-        },
-        formatted,
+        };
+
+        Message {
+            sender: Arc::new(event.sender.clone()),
+            avatar: Arc::new(ImageBuf::empty()),
+            event_id: Arc::new(event.event_id.clone()),
+            contents: contents.clone(),
+            formatted,
+            image,
+            editing_message: contents,
+            editing: false,
+            tx: tx.clone(),
+        }
     }
 }
 
@@ -292,61 +325,58 @@ where
                     Err(TrySendError::Full(_)) => panic!("idk what to do here :("),
                     Err(TrySendError::Closed(_)) => panic!("oh no"),
                 }
-
-                child.event(ctx, event, data, env)
             }
 
-            DruidEvent::Command(cmd) => {
-                if let Some(sync) = cmd.get(SYNC) {
-                    if let Some(rooms) = &sync.rooms {
-                        if let Some(join) = &rooms.join {
-                            for (id, joined) in join.iter() {
-                                if !data.channels_hashed.contains_key(id) {
-                                    data.channels_hashed.insert(
-                                        Arc::new(id.clone()),
-                                        Channel {
-                                            id: Arc::new(id.clone()),
-                                            name: Arc::new(match &joined.name {
-                                                Some(v) => v.clone(),
-                                                None => String::from("<unnamed room>"),
-                                            }),
-                                            messages: joined
-                                                .timeline
-                                                .events
-                                                .iter()
-                                                .map(make_message)
-                                                .collect(),
-                                        },
-                                    );
-                                    data.channels.push_back(Arc::new(id.clone()));
-                                } else {
-                                    data.channels_hashed
-                                        .get_mut(id)
-                                        .unwrap()
-                                        .messages
-                                        .extend(joined.timeline.events.iter().map(make_message));
-                                }
+            DruidEvent::Command(cmd) if cmd.is(SYNC) => {
+                let sync = cmd.get_unchecked(SYNC);
+                if let Some(rooms) = &sync.rooms {
+                    if let Some(join) = &rooms.join {
+                        for (id, joined) in join.iter() {
+                            if !data.channels_hashed.contains_key(id) {
+                                data.channels_hashed.insert(
+                                    Arc::new(id.clone()),
+                                    Channel {
+                                        id: Arc::new(id.clone()),
+                                        name: Arc::new(match &joined.name {
+                                            Some(v) => v.clone(),
+                                            None => String::from("<unnamed room>"),
+                                        }),
+                                        messages: joined
+                                            .timeline
+                                            .events
+                                            .iter()
+                                            .map(make_message(data.tx.clone()))
+                                            .collect(),
+                                    },
+                                );
+                                data.channels.push_back(Arc::new(id.clone()));
+                            } else {
+                                data.channels_hashed
+                                    .get_mut(id)
+                                    .unwrap()
+                                    .messages
+                                    .extend(joined.timeline.events.iter().map(make_message(data.tx.clone())));
                             }
                         }
                     }
+                }
 
-                    match data.tx.try_send(ClientMessage::ClientSync(
-                        sync.next_batch.clone(),
-                        String::from(
-                            r#"{"room": {"timeline": {"limit": 50, "types": ["m.room.message"]}}}"#,
-                        ),
-                    )) {
-                        Ok(_) => (),
-                        Err(TrySendError::Full(_)) => panic!("idk what to do here :("),
-                        Err(TrySendError::Closed(_)) => panic!("oh no"),
-                    }
-                } else {
-                    child.event(ctx, event, data, env)
+                match data.tx.try_send(ClientMessage::ClientSync(
+                    sync.next_batch.clone(),
+                    String::from(
+                        r#"{"room": {"timeline": {"limit": 50, "types": ["m.room.message"]}}}"#,
+                    ),
+                )) {
+                    Ok(_) => (),
+                    Err(TrySendError::Full(_)) => panic!("idk what to do here :("),
+                    Err(TrySendError::Closed(_)) => panic!("oh no"),
                 }
             }
 
-            _ => child.event(ctx, event, data, env),
+            _ => (),
         }
+
+        child.event(ctx, event, data, env)
     }
 }
 
@@ -403,20 +433,108 @@ fn create_channel_listing() -> impl Widget<(Arc<String>, Channel)> {
         .on_click(|_, (current_channel, channel), _| *current_channel = channel.id.clone())
 }
 
+fn editing_textbox() -> impl Widget<Message> {
+    widget::TextBox::multiline()
+        .lens(Message::editing_message)
+        .expand_width()
+}
+
+#[derive(Data, Clone, Copy, PartialEq)]
+enum ContentState {
+    Text,
+    //Editing,
+    Spinner,
+    Image
+}
+
+struct MediaController;
+
+impl<W> widget::Controller<Message, W> for MediaController
+    where W: Widget<Message>
+{
+    fn event(&mut self, child: &mut W, ctx: &mut EventCtx, event: &DruidEvent, data: &mut Message, env: &Env) {
+        match event {
+            DruidEvent::Command(cmd) if cmd.is(SYNC) => {
+                if let ImageState::Url(url, width, height) = &data.image {
+                    match data.tx.try_send(ClientMessage::FetchData(url.clone(), ctx.widget_id())) {
+                        Ok(_) => (),
+                        Err(TrySendError::Full(_)) => panic!("oh no"),
+                        Err(TrySendError::Closed(_)) => panic!("oh no"),
+                    }
+                    data.image = ImageState::Processing(url.clone(), *width, *height);
+                    ctx.set_handled();
+                } else {
+                    child.event(ctx, event, data, env);
+                }
+            }
+
+            DruidEvent::Command(cmd) if cmd.is(FETCH_DATA) => {
+                let contents = cmd.get_unchecked(FETCH_DATA);
+                let (width, height) = match data.image {
+                    ImageState::None => panic!("eeeeee"),
+                    ImageState::Url(_, w, h)
+                    | ImageState::Processing(_, w, h)
+                    | ImageState::Image(_, w, h) => (w, h),
+                };
+
+                let image = image::load_from_memory(&contents.content).unwrap().as_rgba8().unwrap().to_vec();
+                data.image = ImageState::Image(Arc::new(ImageBuf::from_raw(Arc::from(image.as_slice()), druid::piet::ImageFormat::RgbaSeparate, width as usize, height as usize)), width, height);
+                ctx.set_handled();
+            }
+
+            _ => child.event(ctx, event, data, env),
+        }
+    }
+}
+
 fn create_message() -> impl Widget<Message> {
-    let contents = widget::RawLabel::new()
-        .with_text_alignment(TextAlignment::Start)
-        .with_line_break_mode(LineBreaking::WordWrap)
-        .lens(Message::formatted);
+    let contents = widget::ViewSwitcher::new(|data: &Message, _| {
+        match data.image {
+            ImageState::None => ContentState::Text,
+            ImageState::Url(_, _, _) => ContentState::Spinner,
+            ImageState::Processing(_, _, _) => ContentState::Spinner,
+            ImageState::Image(_, _, _) => ContentState::Image,
+        }
+    }, |state, data, _| {
+        match state {
+            ContentState::Text => widget::RawLabel::new()
+                .with_text_alignment(TextAlignment::Start)
+                .with_line_break_mode(LineBreaking::WordWrap)
+                .lens(Message::formatted)
+                .boxed(),
+
+            //ContentState::Editing => todo!(),
+
+            ContentState::Spinner => widget::Spinner::new()
+                .controller(MediaController)
+                .boxed(),
+
+            ContentState::Image => {
+                let (buffer, width, height) = match &data.image {
+                    ImageState::Image(buffer, width, height) => ((**buffer).clone(), *width, *height),
+                    _ => panic!("nyaaa :("),
+                };
+
+                widget::Image::new(buffer)
+                    .boxed()
+            }
+        }
+    });
     let sender = widget::Label::dynamic(|v: &Message, _| (*v.sender).clone())
         .with_text_alignment(TextAlignment::Start);
-    let more_button = widget::Button::new("...")
-        .on_click(|_, data: &mut Message, _| println!("{}", data.event_id))
+    let edit_button = widget::Button::new("...")
+        .on_click(|_, data: &mut Message, _| {
+            data.editing ^= true;
+            if data.editing {
+                println!("{}", data.event_id);
+                data.editing_message = data.contents.clone();
+            }
+        })
         .align_right();
     let mut row = widget::Flex::row()
         .with_child(sender)
         .with_flex_spacer(1.0)
-        .with_child(more_button);
+        .with_child(edit_button);
     row.set_cross_axis_alignment(CrossAxisAlignment::Start);
     let mut column = widget::Flex::column()
         .with_child(row)
@@ -443,7 +561,11 @@ pub fn build_ui() -> impl Widget<Chat> {
                 Vector::new()
             }
         },
-        |_, _| {},
+        |state, data| {
+            if let Some(v) = state.channels_hashed.get_mut(&state.current_channel) {
+                v.messages = data;
+            }
+        },
     ));
     let messages = widget::Scroll::new(messages).vertical().expand_height();
     let textbox = widget::TextBox::multiline()

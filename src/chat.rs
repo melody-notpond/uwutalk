@@ -101,6 +101,13 @@ pub struct SyncState {
     pub device_one_time_keys_count: Option<serde_json::Value>,
 }
 
+#[derive(Debug, Clone)]
+pub struct Content {
+    pub type_: String,
+    pub disposition: String,
+    pub content: Vec<u8>,
+}
+
 impl MatrixClient {
     pub fn new(homeserver: &str, access_code: &str) -> MatrixClient {
         MatrixClient {
@@ -132,6 +139,7 @@ impl MatrixClient {
             .bearer_auth(&self.access_code)
             .send()
             .await?
+            .error_for_status()?
             .text()
             .await?;
         Ok(serde_json::from_str(&event).unwrap())
@@ -198,6 +206,7 @@ impl MatrixClient {
             .bearer_auth(&self.access_code)
             .send()
             .await?
+            .error_for_status()?
             .text()
             .await?;
 
@@ -217,5 +226,30 @@ impl MatrixClient {
         }
 
         Ok(state)
+    }
+
+    pub async fn download_mxc(&self, server_name: &str, media_id: &str) -> Result<Content, Error> {
+        let mut response = self
+            .client
+            .get(format!(
+                "https://{}/_matrix/media/r0/download/{}/{}",
+                self.homeserver,
+                server_name,
+                media_id,
+            ))
+            .send()
+            .await?
+            .error_for_status()?;
+        let mut content = Content {
+            type_: String::from(response.headers().get("Content-Type").map(|v| v.to_str().unwrap()).unwrap_or("")),
+            disposition: String::from(response.headers().get("Content-Disposition").map(|v| v.to_str().unwrap()).unwrap_or("")),
+            content: vec![],
+        };
+
+        while let Some(chunk) = response.chunk().await? {
+            content.content.extend(chunk);
+        }
+
+        Ok(content)
     }
 }

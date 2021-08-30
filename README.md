@@ -24,7 +24,8 @@ Matrix client.
  - [ ] Messages
      - [ ] Showing user avatars
      - [ ] Showing user nicknames
-     - [ ] Receiving images
+     - [X] Receiving images
+     - [ ] Viewing animated images
      - [ ] Sending images
      - [ ] Editing messages
      - [ ] Receiving edits
@@ -37,6 +38,10 @@ Matrix client.
          - [ ] Image embeds
          - [ ] Video embeds
          - [ ] Audio embeds
+     - [ ] Replies
+     - [ ] Read receipts
+     - [ ] Typing indicators
+     - [ ] Statuses and presence
  - [ ] Channels
      - [ ] Creating channels
      - [ ] Inviting people

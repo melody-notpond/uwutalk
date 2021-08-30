@@ -54,15 +54,42 @@ async fn main() {
                         Some(filter)
                     };
 
-                    if event_sink
-                        .submit_command(
-                            chat_gui::SYNC,
-                            client.get_state(next_batch, filter).await.unwrap(),
-                            Target::Global,
-                        )
-                        .is_err()
-                    {
-                        break;
+                    match client.get_state(next_batch, filter).await {
+                        Ok(v) => {
+                            if event_sink
+                                .submit_command(
+                                    chat_gui::SYNC,
+                                    v,
+                                    Target::Global,
+                                )
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+
+                        Err(e) => {
+                            eprintln!("error fetching state: {:?}", e);
+                        }
+                    }
+                }
+
+                FetchData(url, widget) => {
+                    if let Some(url) = url.strip_prefix("mxc://") {
+                        let mut split = url.split('/');
+                        let server = split.next().unwrap_or("");
+                        let media = split.next().unwrap_or("");
+                        match client.download_mxc(server, media).await {
+                            Ok(v) => {
+                                if event_sink.submit_command(chat_gui::FETCH_DATA, v, Target::Widget(widget)).is_err() {
+                                    break;
+                                }
+                            }
+
+                            Err(e) => {
+                                eprintln!("error fetching data: {:?}", e);
+                            }
+                        }
                     }
                 }
             }
