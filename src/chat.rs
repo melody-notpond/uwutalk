@@ -124,9 +124,17 @@ impl MatrixClient {
         formatted: Option<&String>,
     ) -> Result<Event, Error> {
         let body = if let Some(formatted) = formatted {
-            format!("{{\"msgtype\": \"m.text\", \"body\": {:?}, \"formatted_body\": {:?}, \"format\": \"org.matrix.custom.html\"}}", content, formatted)
+            json!({
+                "msgtype": "m.text",
+                "body": content,
+                "format": "org.matrix.custom.html",
+                "formatted_body": formatted,
+            }).to_string()
         } else {
-            format!("{{\"msgtype\": \"m.text\", \"body\": {:?}}}", content)
+            json!({
+                "msgtype": "m.text",
+                "body": content,
+            }).to_string()
         };
 
         let event = self

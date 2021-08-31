@@ -1,13 +1,34 @@
 use std::fs;
+use std::path::Path;
 
 use druid::{AppLauncher, Target, WindowDesc};
 use tokio::sync::mpsc;
 
 use uwutalk::chat::MatrixClient;
 use uwutalk::chat_gui::{self, Chat};
+use directories::ProjectDirs;
 
 #[tokio::main]
 async fn main() {
+    let project = ProjectDirs::from("xyz", "lauwa", "uwutalk").expect("project directories must exist for uwutalk to function");
+    let cache = project.cache_dir();
+    match fs::create_dir_all(&cache) {
+        Ok(_) => (),
+        Err(e) => {
+            eprintln!("error creating cache directory: {:?}", e);
+            std::process::exit(-1);
+        }
+    }
+
+    let thumbnails = cache.join("thumbnails");
+    match fs::create_dir_all(&thumbnails) {
+        Ok(_) => (),
+        Err(e) => {
+            eprintln!("error creating thumbnails directory: {:?}", e);
+            std::process::exit(-1);
+        }
+    }
+
     let file = fs::read_to_string(".env").unwrap();
     let mut contents = file.split('\n');
     let access_token = contents.next().unwrap();
@@ -82,28 +103,77 @@ async fn main() {
                         let mut split = url.split('/');
                         let server = split.next().unwrap_or("");
                         let media = split.next().unwrap_or("");
-                        match client.thumbnail_mxc(server, media, width, height).await {
-                            Ok(v) => match image::load_from_memory(&v.content) {
-                                Ok(v) => {
-                                    if event_sink
-                                        .submit_command(
-                                            chat_gui::FETCH_THUMBNAIL,
-                                            v,
-                                            Target::Widget(widget),
-                                        )
-                                        .is_err()
-                                    {
-                                        break;
+
+                        let mut thumbnails_dir = match thumbnails.read_dir() {
+                            Ok(v) => v,
+                            Err(e) => {
+                                eprintln!("error reading cache directory: {:?}", e);
+                                std::process::exit(-1);
+                            }
+                        };
+                        let mut name = String::new();
+                        name.push_str(server);
+                        name.push('%');
+                        name.push_str(media);
+                        let content = if let Some(thumbnail) = thumbnails_dir.find(|v| match v {
+                            Ok(v) => {
+                                let filename = v.file_name();
+                                let s = Path::new(&filename).to_str().unwrap();
+                                s == name
+                            }
+
+                            Err(_) => false,
+                        }) {
+                            match fs::read(thumbnail.unwrap().path()) {
+                                Ok(v) => Some(v),
+                                Err(e) => {
+                                    eprintln!("error reading cached thumbnail: {:?}", e);
+                                    None
+                                }
+                            }
+                        } else {
+                            None
+                        };
+
+                        let content = match content {
+                            Some(v) => v,
+                            None => {
+                                match client.thumbnail_mxc(server, media, width, height).await {
+                                    Ok(v) => {
+                                        let content = v.content;
+                                        let path = thumbnails.join(name);
+                                        match fs::write(path, &content) {
+                                            Ok(_) => (),
+                                            Err(e) => {
+                                                eprintln!("error writing cache: {:?}", e);
+                                            }
+                                        }
+                                        content
+                                    }
+
+                                    Err(e) => {
+                                        if event_sink
+                                            .submit_command(
+                                                chat_gui::FETCH_THUMBNAIL_FAIL,
+                                                e,
+                                                Target::Widget(widget),
+                                            )
+                                            .is_err()
+                                        {
+                                            break;
+                                        }
+                                        continue;
                                     }
                                 }
-                                Err(e) => eprintln!("error loading image: {:?}", e),
-                            },
+                            }
+                        };
 
-                            Err(e) => {
+                        match image::load_from_memory(&content) {
+                            Ok(v) => {
                                 if event_sink
                                     .submit_command(
-                                        chat_gui::FETCH_THUMBNAIL_FAIL,
-                                        e,
+                                        chat_gui::FETCH_THUMBNAIL,
+                                        v,
                                         Target::Widget(widget),
                                     )
                                     .is_err()
@@ -111,11 +181,11 @@ async fn main() {
                                     break;
                                 }
                             }
+                            Err(e) => eprintln!("error loading image: {:?}", e),
                         }
                     }
                 }
 
-    //     pub async fn edit_message(&self, room: &str, event_id: &str, content: &str, formatted: Option<&String>) -> Result<Event, Error> {
                 EditMessage(room_id, event_id, msg, formatted) => {
                     let formatted = if formatted == msg {
                         None
