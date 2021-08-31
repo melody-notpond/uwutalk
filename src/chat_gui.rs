@@ -12,6 +12,7 @@ use image::DynamicImage;
 use kuchiki::traits::TendrilSink;
 use kuchiki::{NodeData, NodeRef};
 use reqwest::Error;
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 // use uwuifier::uwuify_str_sse;
@@ -38,6 +39,7 @@ struct Channel {
     id: Arc<String>,
     name: Arc<String>,
     messages: Vector<Message>,
+    unresolved_edits: Vector<Edit>,
 }
 
 #[derive(Data, Clone)]
@@ -48,8 +50,16 @@ enum ThumbnailState {
     Image(Arc<ImageBuf>, u64, u64),
 }
 
+#[derive(Data, Clone)]
+struct Edit {
+    associated_event_id: Arc<String>,
+    contents: Arc<String>,
+    formatted: RichText,
+}
+
 #[derive(Data, Clone, Lens)]
 struct Message {
+    edit: Option<Edit>,
     sender: Arc<String>,
     avatar: Arc<ImageBuf>,
     event_id: Arc<String>,
@@ -224,60 +234,76 @@ fn extract_text_and_text_attributes_from_dom(
     }
 }
 
-fn make_message(channel: Arc<String>, tx: mpsc::Sender<ClientMessage>) -> impl Fn(&RoomEvent) -> Message {
-    move |event: &RoomEvent| {
-        let mut attrs = vec![];
-        let formatted: Arc<str> = match event.content.get("formatted_body") {
-            Some(v) => {
-                let root = kuchiki::parse_html().one(v.as_str().unwrap());
-                let mut result = String::new();
-                for child in root.children() {
-                    extract_text_and_text_attributes_from_dom(child, &mut result, &mut attrs);
-                }
-                Arc::from(result)
+fn make_rich_text(formatted: Option<&Value>, default: Option<&Value>, mark_edited: bool) -> RichText {
+    let mut attrs = vec![];
+    let formatted: Arc<str> = match formatted {
+        Some(v) => {
+            let root = kuchiki::parse_html().one(v.as_str().unwrap());
+            let mut result = String::new();
+            for child in root.children() {
+                extract_text_and_text_attributes_from_dom(child, &mut result, &mut attrs);
             }
-
-            None => Arc::from(
-                event
-                    .content
-                    .get("body")
-                    .map(|v| v.as_str().unwrap_or(""))
-                    .unwrap_or(""),
-            ),
-        };
-
-        let mut formatted = RichText::new(formatted);
-        for ((s, e), attr) in attrs {
-            match attr.name.as_str() {
-                "em" => {
-                    formatted.add_attribute(s..e, Attribute::Style(FontStyle::Italic));
-                }
-
-                "strong" => {
-                    formatted.add_attribute(s..e, Attribute::Weight(FontWeight::new(700)));
-                }
-
-                "u" => {
-                    formatted.add_attribute(s..e, Attribute::Underline(true));
-                }
-
-                "code" => {
-                    formatted.add_attribute(s..e, Attribute::FontFamily(FontFamily::MONOSPACE));
-                    formatted.add_attribute(s..e, Attribute::text_color(Color::grey8(200)));
-                }
-
-                "span" if attr.attributes.contains_key("data-mx-spoiler") => {
-                    // TODO
-                }
-
-                "a" => {
-                    // TODO
-                }
-
-                _ => (),
+            if mark_edited {
+                result.push_str(" (edited)");
             }
+            Arc::from(result)
         }
 
+        None => {
+            let default = default.map(|v| v.as_str().unwrap_or("")).unwrap_or("");
+            if mark_edited {
+                let mut default = String::from(default);
+                default.push_str(" (edited)");
+                Arc::from(default)
+            } else {
+                Arc::from(default)
+            }
+        }
+    };
+
+    let mut formatted = RichText::new(formatted);
+    for ((s, e), attr) in attrs {
+        match attr.name.as_str() {
+            "em" => {
+                formatted.add_attribute(s..e, Attribute::Style(FontStyle::Italic));
+            }
+
+            "strong" => {
+                formatted.add_attribute(s..e, Attribute::Weight(FontWeight::new(700)));
+            }
+
+            "u" => {
+                formatted.add_attribute(s..e, Attribute::Underline(true));
+            }
+
+            "code" => {
+                formatted.add_attribute(s..e, Attribute::FontFamily(FontFamily::MONOSPACE));
+                formatted.add_attribute(s..e, Attribute::text_color(Color::grey8(200)));
+            }
+
+            "span" if attr.attributes.contains_key("data-mx-spoiler") => {
+                // TODO
+            }
+
+            "a" => {
+                // TODO
+            }
+
+            _ => (),
+        }
+    }
+
+    if mark_edited {
+        let range = formatted.len() - " (edited)".len()..;
+        formatted.add_attribute(range, Attribute::text_color(Color::GRAY));
+    }
+
+    formatted
+}
+
+fn make_message(channel: Arc<String>, tx: mpsc::Sender<ClientMessage>) -> impl Fn(&RoomEvent) -> Message {
+    move |event: &RoomEvent| {
+        let formatted = make_rich_text(event.content.get("formatted_body"),  event.content.get("body"), false);
         let image = match event.content.get("msgtype") {
             Some(v) if matches!(v.as_str(), Some("m.image")) => {
                 let url = event.content.get("url").unwrap().as_str().unwrap();
@@ -295,7 +321,26 @@ fn make_message(channel: Arc<String>, tx: mpsc::Sender<ClientMessage>) -> impl F
             None => Arc::new(String::new()),
         };
 
+        let edit = match event.content.get("m.relates_to").and_then(|v| v.get("rel_type")).and_then(Value::as_str) {
+            Some(v) if v == "m.replace" => {
+                if let Some(new) = event.content.get("m.new_content") {
+                    let contents = Arc::new(String::from(new.get("body").unwrap().as_str().unwrap()));
+                    let formatted = make_rich_text(new.get("formatted_body"), new.get("body"), true);
+                    Some(Edit {
+                        associated_event_id: Arc::new(String::from(event.content.get("m.relates_to").unwrap().get("event_id").unwrap().as_str().unwrap())),
+                        contents,
+                        formatted,
+                    })
+                } else {
+                    None
+                }
+            }
+
+            _ => None,
+        };
+
         Message {
+            edit,
             sender: Arc::new(event.sender.clone()),
             avatar: Arc::new(ImageBuf::empty()),
             event_id: Arc::new(event.event_id.clone()),
@@ -328,9 +373,16 @@ where
             Event::WindowConnected => {
                 match data.tx.try_send(ClientMessage::ClientSync(
                     String::new(),
-                    String::from(
-                        r#"{"room": {"timeline": {"limit": 50, "types": ["m.room.message"]}}}"#,
-                    ),
+                    json!({
+                        "room": {
+                            "timeline": {
+                                "limit": 50,
+                                "types": [
+                                    "m.room.message"
+                                ]
+                            }
+                        }
+                    }).to_string(),
                 )) {
                     Ok(_) => (),
                     Err(TrySendError::Full(_)) => panic!("idk what to do here :("),
@@ -342,9 +394,16 @@ where
                 // TODO: something smarter than this
                 match data.tx.try_send(ClientMessage::ClientSync(
                     String::new(),
-                    String::from(
-                        r#"{"room": {"timeline": {"limit": 50, "types": ["m.room.message"]}}}"#,
-                    ),
+                    json!({
+                        "room": {
+                            "timeline": {
+                                "limit": 50,
+                                "types": [
+                                    "m.room.message"
+                                ]
+                            }
+                        }
+                    }).to_string(),
                 )) {
                     Ok(_) => (),
                     Err(TrySendError::Full(_)) => panic!("idk what to do here :("),
@@ -357,7 +416,17 @@ where
                 if let Some(rooms) = &sync.rooms {
                     if let Some(join) = &rooms.join {
                         for (id, joined) in join.iter() {
-                            if !data.channels_hashed.contains_key(id) {
+                            let (mut messages, mut edits) = (Vector::new(), Vector::new());
+                            for m in joined.timeline.events.iter().map(make_message(Arc::new(id.clone()), data.tx.clone())) {
+                                match m.edit {
+                                    Some(e) => edits.push_back(e),
+                                    None => messages.push_back(m),
+                                }
+                            }
+
+                            if let Some(channel) = data.channels_hashed.get_mut(id) {
+                                channel.messages.extend(messages);
+                            } else {
                                 data.channels_hashed.insert(
                                     Arc::new(id.clone()),
                                     Channel {
@@ -366,23 +435,30 @@ where
                                             Some(v) => v.clone(),
                                             None => String::from("<unnamed room>"),
                                         }),
-                                        messages: joined
-                                            .timeline
-                                            .events
-                                            .iter()
-                                            .map(make_message(Arc::new(id.clone()), data.tx.clone()))
-                                            .collect(),
+                                        messages,
+                                        unresolved_edits: Vector::new(),
                                     },
                                 );
                                 data.channels.push_back(Arc::new(id.clone()));
-                            } else {
-                                data.channels_hashed.get_mut(id).unwrap().messages.extend(
-                                    joined
-                                        .timeline
-                                        .events
-                                        .iter()
-                                        .map(make_message(Arc::new(id.clone()), data.tx.clone())),
-                                );
+                            }
+                            if let Some(channel) = data.channels_hashed.get_mut(id) {
+                                let mut resolved = vec![];
+                                for (i, edit) in edits.iter().enumerate() {
+                                    for msg in channel.messages.iter_mut() {
+                                        if msg.event_id == edit.associated_event_id {
+                                            msg.contents = edit.contents.clone();
+                                            msg.formatted = edit.formatted.clone();
+                                            resolved.push(i);
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                for (i, resolved) in resolved.into_iter().enumerate() {
+                                    edits.remove(resolved - i);
+                                }
+
+                                channel.unresolved_edits = edits;
                             }
                         }
                     }
@@ -390,9 +466,16 @@ where
 
                 match data.tx.try_send(ClientMessage::ClientSync(
                     sync.next_batch.clone(),
-                    String::from(
-                        r#"{"room": {"timeline": {"limit": 50, "types": ["m.room.message"]}}}"#,
-                    ),
+                    json!({
+                        "room": {
+                            "timeline": {
+                                "limit": 50,
+                                "types": [
+                                    "m.room.message"
+                                ]
+                            }
+                        }
+                    }).to_string(),
                 )) {
                     Ok(_) => (),
                     Err(TrySendError::Full(_)) => panic!("idk what to do here :("),
@@ -670,14 +753,17 @@ pub fn build_ui() -> impl Widget<Chat> {
                 v.messages = data;
             }
         },
-    ));
-    let messages = widget::Scroll::new(messages).vertical().expand_height();
+    ))
+        .scroll()
+        .vertical()
+        .expand_height();
     let textbox = widget::TextBox::multiline()
         .with_placeholder("Say hello!")
         .lens(Chat::editing_message)
-        .expand_width();
-    let textbox = widget::ControllerHost::new(textbox, MessageEntryController);
-    let textbox = widget::Scroll::new(textbox).vertical();
+        .expand_width()
+        .controller(MessageEntryController)
+        .scroll()
+        .vertical();
     let right = widget::Flex::column()
         .with_flex_child(messages, 1.0)
         .with_child(textbox);

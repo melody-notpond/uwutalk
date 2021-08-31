@@ -29,7 +29,7 @@ Matrix client.
      - [ ] Viewing animated images
      - [ ] Sending images
      - [x] Editing messages
-     - [ ] Receiving edits
+     - [x] Receiving edits
      - [ ] Viewing edit history
      - [ ] Redacting messages
      - [ ] Receiving redactions
@@ -84,6 +84,7 @@ Matrix client.
      - [ ] Decrypting
      - [ ] Enabling E2EE in a channel
      - [ ] Verifying devices
+     - [ ] Verifying people
      - [ ] Seeing other people's devices
  - [ ] Slash commands
      - [ ] `/rainbow`
