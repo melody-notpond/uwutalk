@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use reqwest::{Client, Error};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 pub struct MatrixClient {
     client: Client,
@@ -129,12 +129,14 @@ impl MatrixClient {
                 "body": content,
                 "format": "org.matrix.custom.html",
                 "formatted_body": formatted,
-            }).to_string()
+            })
+            .to_string()
         } else {
             json!({
                 "msgtype": "m.text",
                 "body": content,
-            }).to_string()
+            })
+            .to_string()
         };
 
         let event = self
@@ -153,7 +155,13 @@ impl MatrixClient {
         Ok(serde_json::from_str(&event).unwrap())
     }
 
-    pub async fn edit_message(&self, room: &str, event_id: &str, content: &str, formatted: Option<&String>) -> Result<Event, Error> {
+    pub async fn edit_message(
+        &self,
+        room: &str,
+        event_id: &str,
+        content: &str,
+        formatted: Option<&String>,
+    ) -> Result<Event, Error> {
         let body = if let Some(formatted) = formatted {
             json!({
                 "m.new_content": {
@@ -170,7 +178,8 @@ impl MatrixClient {
                 "body": format!(" * {}", content),
                 "format": "org.matrix.custom.html",
                 "formatted_body": format!(" * {}", formatted),
-            }).to_string()
+            })
+            .to_string()
         } else {
             json!({
                 "m.new_content": {
@@ -183,7 +192,8 @@ impl MatrixClient {
                 },
                 "msgtype": "m.text",
                 "body": format!(" * {}", content),
-            }).to_string()
+            })
+            .to_string()
         };
 
         let event = self

@@ -4,13 +4,14 @@ use std::path::Path;
 use druid::{AppLauncher, Target, WindowDesc};
 use tokio::sync::mpsc;
 
+use directories::ProjectDirs;
 use uwutalk::chat::MatrixClient;
 use uwutalk::chat_gui::{self, Chat};
-use directories::ProjectDirs;
 
 #[tokio::main]
 async fn main() {
-    let project = ProjectDirs::from("xyz", "lauwa", "uwutalk").expect("project directories must exist for uwutalk to function");
+    let project = ProjectDirs::from("xyz", "lauwa", "uwutalk")
+        .expect("project directories must exist for uwutalk to function");
     let cache = project.cache_dir();
     match fs::create_dir_all(&cache) {
         Ok(_) => (),

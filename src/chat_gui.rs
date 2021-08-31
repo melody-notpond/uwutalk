@@ -12,7 +12,7 @@ use image::DynamicImage;
 use kuchiki::traits::TendrilSink;
 use kuchiki::{NodeData, NodeRef};
 use reqwest::Error;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 // use uwuifier::uwuify_str_sse;
@@ -234,8 +234,13 @@ fn extract_text_and_text_attributes_from_dom(
     }
 }
 
-fn make_rich_text(formatted: Option<&Value>, default: Option<&Value>, mark_edited: bool) -> RichText {
+fn make_rich_text(
+    formatted: Option<&Value>,
+    default: Option<&Value>,
+    mark_edited: bool,
+) -> RichText {
     let mut attrs = vec![];
+    let edited_message = "    (edited)";
     let formatted: Arc<str> = match formatted {
         Some(v) => {
             let root = kuchiki::parse_html().one(v.as_str().unwrap());
@@ -244,7 +249,7 @@ fn make_rich_text(formatted: Option<&Value>, default: Option<&Value>, mark_edite
                 extract_text_and_text_attributes_from_dom(child, &mut result, &mut attrs);
             }
             if mark_edited {
-                result.push_str(" (edited)");
+                result.push_str(edited_message);
             }
             Arc::from(result)
         }
@@ -253,7 +258,7 @@ fn make_rich_text(formatted: Option<&Value>, default: Option<&Value>, mark_edite
             let default = default.map(|v| v.as_str().unwrap_or("")).unwrap_or("");
             if mark_edited {
                 let mut default = String::from(default);
-                default.push_str(" (edited)");
+                default.push_str(edited_message);
                 Arc::from(default)
             } else {
                 Arc::from(default)
@@ -294,16 +299,24 @@ fn make_rich_text(formatted: Option<&Value>, default: Option<&Value>, mark_edite
     }
 
     if mark_edited {
-        let range = formatted.len() - " (edited)".len()..;
-        formatted.add_attribute(range, Attribute::text_color(Color::GRAY));
+        let range = formatted.len() - edited_message.len()..;
+        formatted.add_attribute(range.clone(), Attribute::text_color(Color::GRAY));
+        formatted.add_attribute(range, Attribute::size(10.0));
     }
 
     formatted
 }
 
-fn make_message(channel: Arc<String>, tx: mpsc::Sender<ClientMessage>) -> impl Fn(&RoomEvent) -> Message {
+fn make_message(
+    channel: Arc<String>,
+    tx: mpsc::Sender<ClientMessage>,
+) -> impl Fn(&RoomEvent) -> Message {
     move |event: &RoomEvent| {
-        let formatted = make_rich_text(event.content.get("formatted_body"),  event.content.get("body"), false);
+        let formatted = make_rich_text(
+            event.content.get("formatted_body"),
+            event.content.get("body"),
+            false,
+        );
         let image = match event.content.get("msgtype") {
             Some(v) if matches!(v.as_str(), Some("m.image")) => {
                 let url = event.content.get("url").unwrap().as_str().unwrap();
@@ -321,13 +334,29 @@ fn make_message(channel: Arc<String>, tx: mpsc::Sender<ClientMessage>) -> impl F
             None => Arc::new(String::new()),
         };
 
-        let edit = match event.content.get("m.relates_to").and_then(|v| v.get("rel_type")).and_then(Value::as_str) {
+        let edit = match event
+            .content
+            .get("m.relates_to")
+            .and_then(|v| v.get("rel_type"))
+            .and_then(Value::as_str)
+        {
             Some(v) if v == "m.replace" => {
                 if let Some(new) = event.content.get("m.new_content") {
-                    let contents = Arc::new(String::from(new.get("body").unwrap().as_str().unwrap()));
-                    let formatted = make_rich_text(new.get("formatted_body"), new.get("body"), true);
+                    let contents =
+                        Arc::new(String::from(new.get("body").unwrap().as_str().unwrap()));
+                    let formatted =
+                        make_rich_text(new.get("formatted_body"), new.get("body"), true);
                     Some(Edit {
-                        associated_event_id: Arc::new(String::from(event.content.get("m.relates_to").unwrap().get("event_id").unwrap().as_str().unwrap())),
+                        associated_event_id: Arc::new(String::from(
+                            event
+                                .content
+                                .get("m.relates_to")
+                                .unwrap()
+                                .get("event_id")
+                                .unwrap()
+                                .as_str()
+                                .unwrap(),
+                        )),
                         contents,
                         formatted,
                     })
@@ -382,7 +411,8 @@ where
                                 ]
                             }
                         }
-                    }).to_string(),
+                    })
+                    .to_string(),
                 )) {
                     Ok(_) => (),
                     Err(TrySendError::Full(_)) => panic!("idk what to do here :("),
@@ -403,7 +433,8 @@ where
                                 ]
                             }
                         }
-                    }).to_string(),
+                    })
+                    .to_string(),
                 )) {
                     Ok(_) => (),
                     Err(TrySendError::Full(_)) => panic!("idk what to do here :("),
@@ -417,7 +448,12 @@ where
                     if let Some(join) = &rooms.join {
                         for (id, joined) in join.iter() {
                             let (mut messages, mut edits) = (Vector::new(), Vector::new());
-                            for m in joined.timeline.events.iter().map(make_message(Arc::new(id.clone()), data.tx.clone())) {
+                            for m in joined
+                                .timeline
+                                .events
+                                .iter()
+                                .map(make_message(Arc::new(id.clone()), data.tx.clone()))
+                            {
                                 match m.edit {
                                     Some(e) => edits.push_back(e),
                                     None => messages.push_back(m),
@@ -475,7 +511,8 @@ where
                                 ]
                             }
                         }
-                    }).to_string(),
+                    })
+                    .to_string(),
                 )) {
                     Ok(_) => (),
                     Err(TrySendError::Full(_)) => panic!("idk what to do here :("),
@@ -545,7 +582,14 @@ impl<W> widget::Controller<Message, W> for EditEntryController
 where
     W: Widget<Message>,
 {
-    fn event(&mut self, child: &mut W, ctx: &mut EventCtx, event: &Event, data: &mut Message, env: &Env) {
+    fn event(
+        &mut self,
+        child: &mut W,
+        ctx: &mut EventCtx,
+        event: &Event,
+        data: &mut Message,
+        env: &Env,
+    ) {
         match event {
             Event::KeyDown(key) if key.key == Key::Enter && !key.mods.shift() => {
                 if !data.editing_message.is_empty() {
@@ -740,20 +784,21 @@ fn create_message() -> impl Widget<Message> {
 }
 
 pub fn build_ui() -> impl Widget<Chat> {
-    let messages = widget::List::new(create_message).lens(CurrentChannelLens.map(
-        |v| {
-            if let Some(v) = v.channels_hashed.get(&v.current_channel) {
-                v.messages.clone()
-            } else {
-                Vector::new()
-            }
-        },
-        |state, data| {
-            if let Some(v) = state.channels_hashed.get_mut(&state.current_channel) {
-                v.messages = data;
-            }
-        },
-    ))
+    let messages = widget::List::new(create_message)
+        .lens(CurrentChannelLens.map(
+            |v| {
+                if let Some(v) = v.channels_hashed.get(&v.current_channel) {
+                    v.messages.clone()
+                } else {
+                    Vector::new()
+                }
+            },
+            |state, data| {
+                if let Some(v) = state.channels_hashed.get_mut(&state.current_channel) {
+                    v.messages = data;
+                }
+            },
+        ))
         .scroll()
         .vertical()
         .expand_height();
