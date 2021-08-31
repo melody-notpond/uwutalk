@@ -24,12 +24,13 @@ Matrix client.
  - [ ] Messages
      - [ ] Showing user avatars
      - [ ] Showing user nicknames
-     - [X] Receiving images
+     - [x] Receiving images
      - [ ] Viewing the actual image (ie, not a thumbnail)
      - [ ] Viewing animated images
      - [ ] Sending images
-     - [ ] Editing messages
+     - [x] Editing messages
      - [ ] Receiving edits
+     - [ ] Viewing edit history
      - [ ] Redacting messages
      - [ ] Receiving redactions
      - [ ] Previewing text files
@@ -40,6 +41,7 @@ Matrix client.
          - [ ] Video embeds
          - [ ] Audio embeds
      - [ ] Replies
+     - [ ] Reactions
      - [ ] Read receipts
      - [ ] Typing indicators
      - [ ] Statuses and presence
@@ -64,6 +66,10 @@ Matrix client.
      - [ ] Receiving stickers
      - [ ] Sending stickers
  - [ ] Settings
+     - [ ] Logging in and out
+     - [ ] Deactivating account
+     - [ ] Managing notifications
+     - [ ] Changing passwords
      - [ ] Changing avatar
          - [ ] Global
          - [ ] Per room
@@ -86,3 +92,4 @@ Matrix client.
      - [ ] Plurality support
      - [ ] Alt accounts support
      - [ ] Theming
+     - [ ] Pronouns

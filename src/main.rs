@@ -37,6 +37,8 @@ async fn main() {
                     } else {
                         Some(formatted)
                     };
+
+                    // TODO: error on send
                     let _ = client
                         .send_message(&room_id, &msg, formatted.as_ref())
                         .await;
@@ -111,6 +113,20 @@ async fn main() {
                             }
                         }
                     }
+                }
+
+    //     pub async fn edit_message(&self, room: &str, event_id: &str, content: &str, formatted: Option<&String>) -> Result<Event, Error> {
+                EditMessage(room_id, event_id, msg, formatted) => {
+                    let formatted = if formatted == msg {
+                        None
+                    } else {
+                        Some(formatted)
+                    };
+
+                    // TODO: error on send
+                    let _ = client
+                        .edit_message(&room_id, &event_id, &msg, formatted.as_ref())
+                        .await;
                 }
             }
         }

@@ -30,6 +30,7 @@ pub enum ClientMessage {
     SendMessage(String, String, String),
     ClientSync(String, String),
     FetchThumbnail(String, WidgetId, u64, u64),
+    EditMessage(String, String, String, String),
 }
 
 #[derive(Data, Clone, Lens)]
@@ -57,6 +58,7 @@ struct Message {
     image: ThumbnailState,
     editing_message: Arc<String>,
     editing: bool,
+    channel: Arc<String>,
 
     #[data(ignore)]
     tx: mpsc::Sender<ClientMessage>,
@@ -222,7 +224,7 @@ fn extract_text_and_text_attributes_from_dom(
     }
 }
 
-fn make_message(tx: mpsc::Sender<ClientMessage>) -> impl Fn(&RoomEvent) -> Message {
+fn make_message(channel: Arc<String>, tx: mpsc::Sender<ClientMessage>) -> impl Fn(&RoomEvent) -> Message {
     move |event: &RoomEvent| {
         let mut attrs = vec![];
         let formatted: Arc<str> = match event.content.get("formatted_body") {
@@ -302,6 +304,7 @@ fn make_message(tx: mpsc::Sender<ClientMessage>) -> impl Fn(&RoomEvent) -> Messa
             image,
             editing_message: contents,
             editing: false,
+            channel: channel.clone(),
             tx: tx.clone(),
         }
     }
@@ -367,7 +370,7 @@ where
                                             .timeline
                                             .events
                                             .iter()
-                                            .map(make_message(data.tx.clone()))
+                                            .map(make_message(Arc::new(id.clone()), data.tx.clone()))
                                             .collect(),
                                     },
                                 );
@@ -378,7 +381,7 @@ where
                                         .timeline
                                         .events
                                         .iter()
-                                        .map(make_message(data.tx.clone())),
+                                        .map(make_message(Arc::new(id.clone()), data.tx.clone())),
                                 );
                             }
                         }
@@ -395,6 +398,10 @@ where
                     Err(TrySendError::Full(_)) => panic!("idk what to do here :("),
                     Err(TrySendError::Closed(_)) => panic!("oh no"),
                 }
+            }
+
+            Event::WindowDisconnected => {
+                while let Err(TrySendError::Full(_)) = data.tx.try_send(ClientMessage::Quit) {}
             }
 
             _ => (),
@@ -421,6 +428,7 @@ where
         match event {
             Event::KeyDown(key) if key.key == Key::Enter && !key.mods.shift() => {
                 if !data.editing_message.is_empty() {
+                    // TODO: do this based on current cursor position
                     let count = data.editing_message.match_indices("```").count();
                     if count % 2 == 0 {
                         let formatted = markdown::parse_markdown(&*data.editing_message);
@@ -442,25 +450,55 @@ where
                 }
             }
 
-            Event::WindowDisconnected => {
-                while let Err(TrySendError::Full(_)) = data.tx.try_send(ClientMessage::Quit) {}
-            }
-
             _ => (),
         }
         child.event(ctx, event, data, env);
     }
 }
 
+struct EditEntryController;
+
+impl<W> widget::Controller<Message, W> for EditEntryController
+where
+    W: Widget<Message>,
+{
+    fn event(&mut self, child: &mut W, ctx: &mut EventCtx, event: &Event, data: &mut Message, env: &Env) {
+        match event {
+            Event::KeyDown(key) if key.key == Key::Enter && !key.mods.shift() => {
+                if !data.editing_message.is_empty() {
+                    // TODO: do this based on current cursor position
+                    let count = data.editing_message.match_indices("```").count();
+                    if count % 2 == 0 {
+                        let formatted = markdown::parse_markdown(&*data.editing_message);
+                        let formatted = markdown::markdown_to_html(formatted);
+                        match data.tx.try_send(ClientMessage::EditMessage(
+                            (*data.channel).clone(),
+                            (*data.event_id).clone(),
+                            (*data.editing_message).clone(),
+                            formatted,
+                        )) {
+                            Ok(_) => (),
+                            Err(TrySendError::Full(_)) => panic!("idk what to do here :("),
+                            Err(TrySendError::Closed(_)) => panic!("oh no"),
+                        }
+                        data.editing_message = Arc::new(String::new());
+                        data.editing = false;
+                        ctx.set_handled();
+                    }
+                } else {
+                    ctx.set_handled();
+                }
+            }
+
+            _ => (),
+        }
+        child.event(ctx, event, data, env)
+    }
+}
+
 fn create_channel_listing() -> impl Widget<(Arc<String>, Channel)> {
     widget::Button::dynamic(|data: &(Arc<String>, Channel), _| (*data.1.name).clone())
         .on_click(|_, (current_channel, channel), _| *current_channel = channel.id.clone())
-}
-
-fn editing_textbox() -> impl Widget<Message> {
-    widget::TextBox::multiline()
-        .lens(Message::editing_message)
-        .expand_width()
 }
 
 #[derive(Data, Clone, Copy, PartialEq)]
@@ -569,7 +607,11 @@ fn create_message() -> impl Widget<Message> {
                 .lens(Message::formatted)
                 .boxed(),
 
-            ContentState::Editing => editing_textbox().boxed(),
+            ContentState::Editing => widget::TextBox::multiline()
+                .lens(Message::editing_message)
+                .controller(EditEntryController)
+                .expand_width()
+                .boxed(),
 
             ContentState::Spinner => widget::Spinner::new().controller(MediaController).boxed(),
 

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use reqwest::{Client, Error};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 pub struct MatrixClient {
     client: Client,
@@ -127,6 +127,55 @@ impl MatrixClient {
             format!("{{\"msgtype\": \"m.text\", \"body\": {:?}, \"formatted_body\": {:?}, \"format\": \"org.matrix.custom.html\"}}", content, formatted)
         } else {
             format!("{{\"msgtype\": \"m.text\", \"body\": {:?}}}", content)
+        };
+
+        let event = self
+            .client
+            .post(format!(
+                "https://{}/_matrix/client/r0/rooms/{}/send/m.room.message",
+                self.homeserver, room
+            ))
+            .body(body)
+            .bearer_auth(&self.access_code)
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
+        Ok(serde_json::from_str(&event).unwrap())
+    }
+
+    pub async fn edit_message(&self, room: &str, event_id: &str, content: &str, formatted: Option<&String>) -> Result<Event, Error> {
+        let body = if let Some(formatted) = formatted {
+            json!({
+                "m.new_content": {
+                    "msgtype": "m.text",
+                    "body": content,
+                    "format": "org.matrix.custom.html",
+                    "formatted_body": formatted,
+                },
+                "m.relates_to": {
+                    "rel_type": "m.replace",
+                    "event_id": event_id,
+                },
+                "msgtype": "m.text",
+                "body": format!(" * {}", content),
+                "format": "org.matrix.custom.html",
+                "formatted_body": format!(" * {}", formatted),
+            }).to_string()
+        } else {
+            json!({
+                "m.new_content": {
+                    "msgtype": "m.text",
+                    "body": content,
+                },
+                "m.relates_to": {
+                    "rel_type": "m.replace",
+                    "event_id": event_id,
+                },
+                "msgtype": "m.text",
+                "body": format!(" * {}", content),
+            }).to_string()
         };
 
         let event = self
