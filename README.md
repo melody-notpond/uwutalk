@@ -34,6 +34,7 @@ Matrix client.
      - [ ] Viewing edit history
      - [ ] Redacting messages
      - [ ] Receiving redactions
+     - [ ] Timestamps
      - [ ] Previewing text files
      - [ ] Previewing videos
      - [ ] Previewing audio files

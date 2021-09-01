@@ -3,11 +3,8 @@ use std::sync::Arc;
 use druid::im::{HashMap, Vector};
 use druid::keyboard_types::Key;
 use druid::text::{Attribute, RichText};
-use druid::widget::{CrossAxisAlignment, LineBreaking, ListIter};
-use druid::{
-    widget, Color, Data, Env, Event, EventCtx, FontFamily, FontStyle, FontWeight, ImageBuf, Lens,
-    LensExt, Selector, TextAlignment, Widget, WidgetExt, WidgetId,
-};
+use druid::widget::{Axis, CrossAxisAlignment, LineBreaking, ListIter};
+use druid::{Color, Data, Env, Event, EventCtx, FontFamily, FontStyle, FontWeight, ImageBuf, Lens, LensExt, Point, Selector, TextAlignment, Widget, WidgetExt, WidgetId, widget};
 use kuchiki::traits::TendrilSink;
 use kuchiki::{NodeData, NodeRef};
 use reqwest::Error;
@@ -54,6 +51,7 @@ struct Channel {
     name: Arc<String>,
     messages: Vector<Message>,
     unresolved_edits: Vector<Edit>,
+    bottom: bool,
 }
 
 #[derive(Data, Clone)]
@@ -402,6 +400,52 @@ fn make_message(
     }
 }
 
+struct MessageScrollController;
+
+impl<W> widget::Controller<Chat, widget::Scroll<Chat, W>> for MessageScrollController
+    where W: Widget<Chat>
+{
+    fn event(&mut self, child: &mut widget::Scroll<Chat, W>, ctx: &mut EventCtx, event: &Event, data: &mut Chat, env: &Env) {
+        if let Event::Wheel(wheel) = event {
+            if let Some(channel) = data.channels_hashed.get_mut(&data.current_channel) {
+                if channel.bottom && wheel.wheel_delta.y < 0.0 {
+                    channel.bottom = false;
+                }
+            }
+        }
+        child.event(ctx, event, data, env);
+
+        if let Some(channel) = data.channels_hashed.get_mut(&data.current_channel) {
+            if !channel.bottom && child.viewport_rect().contains(Point {
+                x: 0.0,
+                y: child.child_size().height - 0.01,
+            }) {
+                channel.bottom = true;
+            }
+        }
+    }
+
+    fn lifecycle(
+        &mut self,
+        child: &mut widget::Scroll<Chat, W>,
+        ctx: &mut druid::LifeCycleCtx,
+        event: &druid::LifeCycle,
+        data: &Chat,
+        env: &Env,
+    ) {
+        child.lifecycle(ctx, event, data, env);
+        if let Some(channel) = data.channels_hashed.get(&data.current_channel) {
+            if channel.bottom {
+                child.scroll_to_on_axis(Axis::Vertical, f64::INFINITY);
+            }
+        }
+    }
+
+    fn update(&mut self, child: &mut widget::Scroll<Chat, W>, ctx: &mut druid::UpdateCtx, old_data: &Chat, data: &Chat, env: &Env) {
+        child.update(ctx, old_data, data, env);
+    }
+}
+
 struct ChatController;
 
 impl<W> widget::Controller<Chat, W> for ChatController
@@ -491,6 +535,7 @@ where
                                         }),
                                         messages,
                                         unresolved_edits: Vector::new(),
+                                        bottom: true,
                                     },
                                 );
                                 data.channels.push_back(Arc::new(id.clone()));
@@ -815,6 +860,7 @@ pub fn build_ui() -> impl Widget<Chat> {
         ))
         .scroll()
         .vertical()
+        .controller(MessageScrollController)
         .expand_height();
     let textbox = widget::TextBox::multiline()
         .with_placeholder("Say hello!")

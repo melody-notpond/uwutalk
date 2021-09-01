@@ -3096,7 +3096,6 @@ version = "0.1.0"
 dependencies = [
  "directories",
  "druid",
- "image",
  "kuchiki",
  "reqwest",
  "serde",
