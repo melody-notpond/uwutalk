@@ -26,6 +26,7 @@ Matrix client.
      - [ ] Showing user nicknames
      - [x] Receiving images
      - [ ] Viewing the actual image (ie, not a thumbnail)
+     - [ ] Error message on invalid image
      - [ ] Viewing animated images
      - [ ] Sending images
      - [x] Editing messages

@@ -321,8 +321,8 @@ fn make_message(
             Some(v) if matches!(v.as_str(), Some("m.image")) => {
                 let url = event.content.get("url").unwrap().as_str().unwrap();
                 let info = event.content.get("info").unwrap();
-                let width = info.get("w").and_then(Value::as_u64).unwrap_or(800);
-                let height = info.get("h").and_then(Value::as_u64).unwrap_or(600);
+                let width = info.get("w").and_then(Value::as_u64).unwrap_or(0);
+                let height = info.get("h").and_then(Value::as_u64).unwrap_or(0);
                 ThumbnailState::Url(String::from(url), width, height)
             }
 
