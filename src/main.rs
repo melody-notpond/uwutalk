@@ -210,8 +210,8 @@ async fn main() {
                             }
                         };
 
-                        match ImageBuf::from_data(&content) {
-                            Ok(v) => {
+                        match tokio::task::spawn_blocking(move || ImageBuf::from_data(&content)).await {
+                            Ok(Ok(v)) => {
                                 if event_sink
                                     .submit_command(
                                         chat_gui::FETCH_THUMBNAIL,
@@ -224,7 +224,9 @@ async fn main() {
                                 }
                             }
 
-                            Err(e) => eprintln!("error loading image: {:?}", e),
+                            Ok(Err(e)) => eprintln!("error loading image: {:?}", e),
+
+                            Err(e) => eprintln!("error spawning blocking thread: {:?}", e),
                         }
                     }
                 }
