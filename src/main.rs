@@ -1,4 +1,4 @@
-use std::fs;
+use tokio::fs;
 use std::path::Path;
 
 use druid::{AppLauncher, ImageBuf, Target, WindowDesc};
@@ -13,7 +13,7 @@ async fn main() {
     let project = ProjectDirs::from("xyz", "lauwa", "uwutalk")
         .expect("project directories must exist for uwutalk to function");
     let cache = project.cache_dir();
-    match fs::create_dir_all(&cache) {
+    match fs::create_dir_all(&cache).await {
         Ok(_) => (),
         Err(e) => {
             eprintln!("error creating cache directory: {:?}", e);
@@ -22,7 +22,7 @@ async fn main() {
     }
 
     let thumbnails = cache.join("thumbnails");
-    match fs::create_dir_all(&thumbnails) {
+    match fs::create_dir_all(&thumbnails).await {
         Ok(_) => (),
         Err(e) => {
             eprintln!("error creating thumbnails directory: {:?}", e);
@@ -30,7 +30,7 @@ async fn main() {
         }
     }
 
-    let file = fs::read_to_string(".env").unwrap();
+    let file = fs::read_to_string(".env").await.unwrap();
     let mut contents = file.split('\n');
     let access_token = contents.next().unwrap();
     let homeserver = contents.next().unwrap();
@@ -166,7 +166,7 @@ async fn main() {
 
                             Err(_) => false,
                         }) {
-                            match fs::read(thumbnail.unwrap().path()) {
+                            match fs::read(thumbnail.unwrap().path()).await {
                                 Ok(v) => Some(v),
                                 Err(e) => {
                                     eprintln!("error reading cached thumbnail: {:?}", e);
@@ -184,7 +184,7 @@ async fn main() {
                                     Ok(v) => {
                                         let content = v.content;
                                         let path = thumbnails.join(name);
-                                        match fs::write(path, &content) {
+                                        match fs::write(path, &content).await {
                                             Ok(_) => (),
                                             Err(e) => {
                                                 eprintln!("error writing cache: {:?}", e);
