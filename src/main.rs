@@ -43,28 +43,15 @@ async fn main() {
     let launcher =
         AppLauncher::with_window(WindowDesc::new(chat_gui::build_ui()).window_size((800., 600.)));
 
-    let (tx, mut rx) = mpsc::channel(32);
+    let (sync_tx, mut rx) = mpsc::channel(32);
     let event_sink = launcher.get_external_handle();
 
-    let manager = tokio::spawn(async move {
-        use uwutalk::chat_gui::ClientMessage::*;
+    let sync = tokio::spawn(async move {
+        use uwutalk::chat_gui::Syncing::*;
 
         while let Some(msg) = rx.recv().await {
             match msg {
                 Quit => break,
-
-                SendMessage(room_id, msg, formatted) => {
-                    let formatted = if formatted == msg {
-                        None
-                    } else {
-                        Some(formatted)
-                    };
-
-                    // TODO: error on send
-                    let _ = client
-                        .send_message(&room_id, &msg, formatted.as_ref())
-                        .await;
-                }
 
                 ClientSync(next_batch, filter) => {
                     let next_batch = if next_batch.is_empty() {
@@ -98,6 +85,60 @@ async fn main() {
                         }
                     }
                 }
+            }
+        }
+    });
+
+    let client = MatrixClient::new(homeserver, access_token);
+    let (action_tx, mut rx) = mpsc::channel(32);
+    //let event_sink = launcher.get_external_handle();
+
+    let action = tokio::spawn(async move {
+        use uwutalk::chat_gui::UserAction::*;
+
+        while let Some(msg) = rx.recv().await {
+            match msg {
+                Quit => break,
+
+                SendMessage(room_id, msg, formatted) => {
+                    let formatted = if formatted == msg {
+                        None
+                    } else {
+                        Some(formatted)
+                    };
+
+                    // TODO: error on send
+                    let _ = client
+                        .send_message(&room_id, &msg, formatted.as_ref())
+                        .await;
+                }
+
+                EditMessage(room_id, event_id, msg, formatted) => {
+                    let formatted = if formatted == msg {
+                        None
+                    } else {
+                        Some(formatted)
+                    };
+
+                    // TODO: error on send
+                    let _ = client
+                        .edit_message(&room_id, &event_id, &msg, formatted.as_ref())
+                        .await;
+                }
+            }
+        }
+    });
+
+    let client = MatrixClient::new(homeserver, access_token);
+    let (media_tx, mut rx) = mpsc::channel(32);
+    let event_sink = launcher.get_external_handle();
+
+    let media = tokio::spawn(async move {
+        use uwutalk::chat_gui::MediaFetch::*;
+
+        while let Some(msg) = rx.recv().await {
+            match msg {
+                Quit => break,
 
                 FetchThumbnail(url, widget, width, height) => {
                     if let Some(url) = url.strip_prefix("mxc://") {
@@ -187,23 +228,12 @@ async fn main() {
                         }
                     }
                 }
-
-                EditMessage(room_id, event_id, msg, formatted) => {
-                    let formatted = if formatted == msg {
-                        None
-                    } else {
-                        Some(formatted)
-                    };
-
-                    // TODO: error on send
-                    let _ = client
-                        .edit_message(&room_id, &event_id, &msg, formatted.as_ref())
-                        .await;
-                }
             }
         }
     });
 
-    launcher.launch(Chat::new(tx)).unwrap();
-    manager.await.unwrap();
+    launcher.launch(Chat::new(sync_tx, action_tx, media_tx)).unwrap();
+    sync.await.unwrap();
+    action.await.unwrap();
+    media.await.unwrap();
 }

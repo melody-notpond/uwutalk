@@ -25,12 +25,27 @@ pub const FETCH_THUMBNAIL: Selector<ImageBuf> = Selector::new("uwutalk.matrix.fe
 pub const FETCH_THUMBNAIL_FAIL: Selector<Error> =
     Selector::new("uwutalk.matrix.fail.fetch_thumbnail");
 
-pub enum ClientMessage {
+pub enum Syncing {
+    Quit,
+    ClientSync(String, String),
+}
+
+pub enum UserAction {
     Quit,
     SendMessage(String, String, String),
-    ClientSync(String, String),
-    FetchThumbnail(String, WidgetId, u64, u64),
     EditMessage(String, String, String, String),
+}
+
+pub enum MediaFetch {
+    Quit,
+    FetchThumbnail(String, WidgetId, u64, u64),
+}
+
+#[derive(Clone)]
+struct Senders {
+    sync_tx: mpsc::Sender<Syncing>,
+    action_tx: mpsc::Sender<UserAction>,
+    media_tx: mpsc::Sender<MediaFetch>,
 }
 
 #[derive(Data, Clone, Lens)]
@@ -70,7 +85,7 @@ struct Message {
     channel: Arc<String>,
 
     #[data(ignore)]
-    tx: mpsc::Sender<ClientMessage>,
+    txs: Senders,
 }
 
 #[derive(Data, Clone, Lens)]
@@ -81,17 +96,21 @@ pub struct Chat {
     current_channel: Arc<String>,
 
     #[data(ignore)]
-    tx: mpsc::Sender<ClientMessage>,
+    txs: Senders,
 }
 
 impl Chat {
-    pub fn new(tx: mpsc::Sender<ClientMessage>) -> Chat {
+    pub fn new(sync_tx: mpsc::Sender<Syncing>, action_tx: mpsc::Sender<UserAction>, media_tx: mpsc::Sender<MediaFetch>) -> Chat {
         Chat {
             editing_message: Arc::new(String::new()),
             channels_hashed: HashMap::new(),
             channels: Vector::new(),
             current_channel: Arc::new(String::new()),
-            tx,
+            txs: Senders {
+                sync_tx,
+                action_tx,
+                media_tx,
+            },
         }
     }
 }
@@ -308,7 +327,7 @@ fn make_rich_text(
 
 fn make_message(
     channel: Arc<String>,
-    tx: mpsc::Sender<ClientMessage>,
+    txs: Senders,
 ) -> impl Fn(&RoomEvent) -> Message {
     move |event: &RoomEvent| {
         let formatted = make_rich_text(
@@ -378,7 +397,7 @@ fn make_message(
             editing_message: contents,
             editing: false,
             channel: channel.clone(),
-            tx: tx.clone(),
+            txs: txs.clone(),
         }
     }
 }
@@ -399,7 +418,7 @@ where
     ) {
         match event {
             Event::WindowConnected => {
-                match data.tx.try_send(ClientMessage::ClientSync(
+                match data.txs.sync_tx.try_send(Syncing::ClientSync(
                     String::new(),
                     json!({
                         "room": {
@@ -421,7 +440,7 @@ where
 
             Event::Command(cmd) if cmd.is(SYNC_FAIL) => {
                 // TODO: something smarter than this
-                match data.tx.try_send(ClientMessage::ClientSync(
+                match data.txs.sync_tx.try_send(Syncing::ClientSync(
                     String::new(),
                     json!({
                         "room": {
@@ -451,7 +470,7 @@ where
                                 .timeline
                                 .events
                                 .iter()
-                                .map(make_message(Arc::new(id.clone()), data.tx.clone()))
+                                .map(make_message(Arc::new(id.clone()), data.txs.clone()))
                             {
                                 match m.edit {
                                     Some(e) => edits.push_back(e),
@@ -499,7 +518,7 @@ where
                     }
                 }
 
-                match data.tx.try_send(ClientMessage::ClientSync(
+                match data.txs.sync_tx.try_send(Syncing::ClientSync(
                     sync.next_batch.clone(),
                     json!({
                         "room": {
@@ -520,7 +539,9 @@ where
             }
 
             Event::WindowDisconnected => {
-                while let Err(TrySendError::Full(_)) = data.tx.try_send(ClientMessage::Quit) {}
+                while let Err(TrySendError::Full(_)) = data.txs.sync_tx.try_send(Syncing::Quit) {}
+                while let Err(TrySendError::Full(_)) = data.txs.action_tx.try_send(UserAction::Quit) {}
+                while let Err(TrySendError::Full(_)) = data.txs.media_tx.try_send(MediaFetch::Quit) {}
             }
 
             _ => (),
@@ -552,7 +573,7 @@ where
                     if count % 2 == 0 {
                         let formatted = markdown::parse_markdown(&*data.editing_message);
                         let formatted = markdown::markdown_to_html(formatted);
-                        match data.tx.try_send(ClientMessage::SendMessage(
+                        match data.txs.action_tx.try_send(UserAction::SendMessage(
                             (*data.current_channel).clone(),
                             (*data.editing_message).clone(),
                             formatted,
@@ -597,7 +618,7 @@ where
                     if count % 2 == 0 {
                         let formatted = markdown::parse_markdown(&*data.editing_message);
                         let formatted = markdown::markdown_to_html(formatted);
-                        match data.tx.try_send(ClientMessage::EditMessage(
+                        match data.txs.action_tx.try_send(UserAction::EditMessage(
                             (*data.channel).clone(),
                             (*data.event_id).clone(),
                             (*data.editing_message).clone(),
@@ -652,7 +673,7 @@ where
         match event {
             Event::Command(cmd) if cmd.is(FETCH_THUMBNAIL_FAIL) => {
                 if let ThumbnailState::Url(url, width, height) = &data.image {
-                    match data.tx.try_send(ClientMessage::FetchThumbnail(
+                    match data.txs.media_tx.try_send(MediaFetch::FetchThumbnail(
                         url.clone(),
                         ctx.widget_id(),
                         *width,
@@ -667,7 +688,7 @@ where
 
             Event::Command(cmd) if cmd.is(SYNC) => {
                 if let ThumbnailState::Url(url, width, height) = &data.image {
-                    match data.tx.try_send(ClientMessage::FetchThumbnail(
+                    match data.txs.media_tx.try_send(MediaFetch::FetchThumbnail(
                         url.clone(),
                         ctx.widget_id(),
                         *width,
