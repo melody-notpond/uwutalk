@@ -321,8 +321,8 @@ fn make_message(
             Some(v) if matches!(v.as_str(), Some("m.image")) => {
                 let url = event.content.get("url").unwrap().as_str().unwrap();
                 let info = event.content.get("info").unwrap();
-                let width = info.get("w").unwrap().as_u64().unwrap();
-                let height = info.get("h").unwrap().as_u64().unwrap();
+                let width = info.get("w").and_then(Value::as_u64).unwrap_or(800);
+                let height = info.get("h").and_then(Value::as_u64).unwrap_or(600);
                 ThumbnailState::Url(String::from(url), width, height)
             }
 
@@ -815,7 +815,9 @@ pub fn build_ui() -> impl Widget<Chat> {
 
     let channels = widget::List::new(create_channel_listing).lens(AllChannelsLens);
     let channels = widget::Scroll::new(channels).vertical();
-    let top = widget::Split::columns(channels, right).split_point(0.2);
-    widget::ControllerHost::new(top, ChatController).padding(5.0)
-    // .debug_paint_layout()
+    widget::Split::columns(channels, right)
+        .split_point(0.2)
+        .controller(ChatController)
+        .padding(5.0)
+        // .debug_paint_layout()
 }
