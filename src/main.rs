@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use druid::{AppLauncher, Target, WindowDesc};
+use druid::{AppLauncher, ImageBuf, Target, WindowDesc};
 use tokio::sync::mpsc;
 
 use directories::ProjectDirs;
@@ -169,7 +169,7 @@ async fn main() {
                             }
                         };
 
-                        match image::load_from_memory(&content) {
+                        match ImageBuf::from_data(&content) {
                             Ok(v) => {
                                 if event_sink
                                     .submit_command(
@@ -182,6 +182,7 @@ async fn main() {
                                     break;
                                 }
                             }
+
                             Err(e) => eprintln!("error loading image: {:?}", e),
                         }
                     }

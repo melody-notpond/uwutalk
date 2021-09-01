@@ -8,7 +8,6 @@ use druid::{
     widget, Color, Data, Env, Event, EventCtx, FontFamily, FontStyle, FontWeight, ImageBuf, Lens,
     LensExt, Selector, TextAlignment, Widget, WidgetExt, WidgetId,
 };
-use image::DynamicImage;
 use kuchiki::traits::TendrilSink;
 use kuchiki::{NodeData, NodeRef};
 use reqwest::Error;
@@ -22,7 +21,7 @@ use super::markdown;
 
 pub const SYNC: Selector<SyncState> = Selector::new("uwutalk.matrix.sync");
 pub const SYNC_FAIL: Selector<Error> = Selector::new("uwutalk.matrix.fail.sync");
-pub const FETCH_THUMBNAIL: Selector<DynamicImage> = Selector::new("uwutalk.matrix.fetch_thumbnail");
+pub const FETCH_THUMBNAIL: Selector<ImageBuf> = Selector::new("uwutalk.matrix.fetch_thumbnail");
 pub const FETCH_THUMBNAIL_FAIL: Selector<Error> =
     Selector::new("uwutalk.matrix.fail.fetch_thumbnail");
 
@@ -694,14 +693,8 @@ where
                     | ThumbnailState::Image(_, w, h) => (w, h),
                 };
 
-                let image = Arc::from(image.as_rgba8().unwrap().get(..).unwrap());
                 data.image = ThumbnailState::Image(
-                    Arc::new(ImageBuf::from_raw(
-                        image,
-                        druid::piet::ImageFormat::RgbaSeparate,
-                        width as usize,
-                        height as usize,
-                    )),
+                    Arc::new(image.clone()),
                     width,
                     height,
                 );
