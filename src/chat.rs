@@ -277,8 +277,11 @@ impl MatrixClient {
             .text()
             .await?;
 
-        let mut state: SyncState = match serde_json::from_str(&state) {
-            Ok(v) => v,
+        let mut state: SyncState = match tokio::task::spawn_blocking(move|| serde_json::from_str(&state)).await {
+            Ok(Ok(v)) => v,
+            Ok(Err(e)) => {
+                panic!("oh no: {}\n", e);
+            }
             Err(e) => {
                 panic!("oh no: {}\n", e);
             }
@@ -317,14 +320,14 @@ impl MatrixClient {
                 response
                     .headers()
                     .get("Content-Type")
-                    .map(|v| v.to_str().unwrap())
+                    .and_then(|v| v.to_str().ok())
                     .unwrap_or(""),
             ),
             disposition: String::from(
                 response
                     .headers()
                     .get("Content-Disposition")
-                    .map(|v| v.to_str().unwrap())
+                    .and_then(|v| v.to_str().ok())
                     .unwrap_or(""),
             ),
             content: vec![],
