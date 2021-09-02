@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use reqwest::{Client, Error};
 use serde::Deserialize;
@@ -12,7 +12,7 @@ pub struct MatrixClient {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct Event {
-    pub event_id: String,
+    pub event_id: Arc<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -20,14 +20,14 @@ pub struct StateEvent {
     pub content: Value,
 
     #[serde(rename = "type")]
-    pub type_: String,
+    pub type_: Arc<String>,
 
-    pub event_id: String,
-    pub sender: String,
+    pub event_id: Arc<String>,
+    pub sender: Arc<String>,
     pub origin_server_ts: u64,
     pub unsigned: UnsignedData,
     pub prev_content: Option<Value>,
-    pub state_key: String,
+    pub state_key: Arc<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -39,7 +39,7 @@ pub struct State {
 pub struct UnsignedData {
     pub age: Option<i64>,
     pub redacted_because: Option<Event>,
-    pub transaction_id: Option<String>,
+    pub transaction_id: Option<Arc<String>>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -47,9 +47,9 @@ pub struct RoomEvent {
     pub content: Value,
 
     #[serde(rename = "type")]
-    pub type_: String,
-    pub event_id: String,
-    pub sender: String,
+    pub type_: Arc<String>,
+    pub event_id: Arc<String>,
+    pub sender: Arc<String>,
     pub origin_server_ts: u64,
     pub unsigned: UnsignedData,
 }
@@ -74,7 +74,7 @@ pub struct UnreadNotificationCounts {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct JoinedRoom {
-    pub name: Option<String>,
+    pub name: Option<Arc<String>>,
     pub summary: HashMap<String, Value>,
     pub state: State,
     pub timeline: Timeline,
@@ -85,14 +85,14 @@ pub struct JoinedRoom {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct SyncRooms {
-    pub join: Option<HashMap<String, JoinedRoom>>,
-    pub invite: Option<HashMap<String, Value>>,
-    pub leave: Option<HashMap<String, Value>>,
+    pub join: Option<HashMap<Arc<String>, JoinedRoom>>,
+    pub invite: Option<HashMap<Arc<String>, Value>>,
+    pub leave: Option<HashMap<Arc<String>, Value>>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct SyncState {
-    pub next_batch: String,
+    pub next_batch: Arc<String>,
     pub rooms: Option<SyncRooms>,
     pub presence: Option<serde_json::Value>,
     pub account_data: Option<serde_json::Value>,
@@ -103,15 +103,15 @@ pub struct SyncState {
 
 #[derive(Debug, Clone)]
 pub struct Content {
-    pub type_: String,
-    pub disposition: String,
+    pub type_: Arc<String>,
+    pub disposition: Arc<String>,
     pub content: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RoomMessages {
-    pub start: String,
-    pub end: String,
+    pub start: Arc<String>,
+    pub end: Arc<String>,
     pub chunk: Vec<RoomEvent>,
     pub state: Option<Vec<StateEvent>>,
 }
@@ -135,7 +135,7 @@ impl MatrixClient {
         &self,
         room: &str,
         content: &str,
-        formatted: Option<&String>,
+        formatted: Option<Arc<String>>,
     ) -> Result<Event, Error> {
         let body = if let Some(formatted) = formatted {
             json!({
@@ -174,7 +174,7 @@ impl MatrixClient {
         room: &str,
         event_id: &str,
         content: &str,
-        formatted: Option<&String>,
+        formatted: Option<Arc<String>>,
     ) -> Result<Event, Error> {
         let body = if let Some(formatted) = formatted {
             json!({
@@ -226,7 +226,7 @@ impl MatrixClient {
         Ok(serde_json::from_str(&event).unwrap())
     }
 
-    async fn get_name(&self, room: &str) -> Option<String> {
+    async fn get_name(&self, room: &str) -> Option<Arc<String>> {
         let name = self
             .client
             .get(format!(
@@ -238,9 +238,9 @@ impl MatrixClient {
             .await
             .ok()?;
         if name.status() == 200 {
-            Some(String::from(
+            Some(Arc::new(String::from(
                 serde_json::from_str::<Value>(&name.text().await.ok()?).ok()?["name"].as_str()?,
-            ))
+            )))
         } else {
             let name = self
                 .client
@@ -254,10 +254,10 @@ impl MatrixClient {
                 .ok()?;
 
             if name.status() == 200 {
-                Some(String::from(
+                Some(Arc::new(String::from(
                     serde_json::from_str::<Value>(&name.text().await.ok()?).ok()?["alias"]
                         .as_str()?,
-                ))
+                )))
             } else {
                 None
             }
@@ -266,8 +266,8 @@ impl MatrixClient {
 
     pub async fn get_state(
         &self,
-        since: Option<String>,
-        filter: Option<String>,
+        since: Option<Arc<String>>,
+        filter: Option<Arc<String>>,
     ) -> Result<SyncState, Error> {
         let mut queries = vec![];
         if let Some(since) = since {
@@ -304,7 +304,11 @@ impl MatrixClient {
         if let Some(rooms) = &mut state.rooms {
             if let Some(join) = &mut rooms.join {
                 for (id, joined) in join.iter_mut() {
-                    joined.name = self.get_name(id).await;
+                    joined.name = if let Some(v) = self.get_name(id).await {
+                        Some(v)
+                    } else {
+                        joined.summary.get("m.heroes").map(|v| v.as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect::<Vec<&str>>().join(", ")).map(Arc::new)
+                    }
                 }
             }
         }
@@ -312,7 +316,7 @@ impl MatrixClient {
         Ok(state)
     }
 
-    pub async fn get_room_messages(&self, room_id: &str, from: &str, dir: RoomDirection, to: Option<&String>, limit: Option<u64>, filter: Option<&String>) -> Result<RoomMessages, Error> {
+    pub async fn get_room_messages(&self, room_id: &str, from: &str, dir: RoomDirection, to: Option<&String>, limit: Option<u64>, filter: Option<Arc<String>>) -> Result<RoomMessages, Error> {
         let dir = match dir {
             RoomDirection::Forwards => "f",
             RoomDirection::Backwards => "b",
@@ -322,11 +326,11 @@ impl MatrixClient {
             Some(v) => format!("{}", v),
             None => String::from("10"),
         };
-        let filter = match filter {
+        let filter_ = match filter.as_ref() {
             Some(v) => v.as_str(),
             None => "",
         };
-        let mut queries = vec![("from", from), ("dir", dir), ("limit", &limit), ("filter", filter)];
+        let mut queries = vec![("from", from), ("dir", dir), ("limit", &limit), ("filter", filter_)];
         if let Some(to) = to {
             queries.push(("to", to));
         }
@@ -377,20 +381,20 @@ impl MatrixClient {
             .await?
             .error_for_status()?;
         let mut content = Content {
-            type_: String::from(
+            type_: Arc::new(String::from(
                 response
                     .headers()
                     .get("Content-Type")
                     .and_then(|v| v.to_str().ok())
                     .unwrap_or(""),
-            ),
-            disposition: String::from(
+            )),
+            disposition: Arc::new(String::from(
                 response
                     .headers()
                     .get("Content-Disposition")
                     .and_then(|v| v.to_str().ok())
                     .unwrap_or(""),
-            ),
+            )),
             content: vec![],
         };
 

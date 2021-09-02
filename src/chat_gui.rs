@@ -18,7 +18,7 @@ use super::markdown;
 
 pub const SYNC: Selector<SyncState> = Selector::new("uwutalk.matrix.sync");
 pub const SYNC_FAIL: Selector<Error> = Selector::new("uwutalk.matrix.fail.sync");
-pub const FETCH_FROM_ROOM: Selector<(String, RoomMessages)> = Selector::new("uwutalk.matrix.fetch_from_room");
+pub const FETCH_FROM_ROOM: Selector<(Arc<String>, RoomMessages)> = Selector::new("uwutalk.matrix.fetch_from_room");
 pub const FETCH_FROM_ROOM_FAIL: Selector<Error> = Selector::new("uwutalk.matrix.fail.fetch_from_room");
 pub const FETCH_THUMBNAIL: Selector<ImageBuf> = Selector::new("uwutalk.matrix.fetch_thumbnail");
 pub const FETCH_THUMBNAIL_FAIL: Selector<Error> = Selector::new("uwutalk.matrix.fail.fetch_thumbnail");
@@ -26,19 +26,19 @@ const SCROLLED: Selector<()> = Selector::new("uwutalk.matrix.scrolled");
 
 pub enum Syncing {
     Quit,
-    ClientSync(String, String),
-    FetchFromRoom(String, String, String)
+    ClientSync(Arc<String>, Arc<String>),
+    FetchFromRoom(Arc<String>, Arc<String>, Arc<String>)
 }
 
 pub enum UserAction {
     Quit,
-    SendMessage(String, String, String),
-    EditMessage(String, String, String, String),
+    SendMessage(Arc<String>, Arc<String>, Arc<String>),
+    EditMessage(Arc<String>, Arc<String>, Arc<String>, Arc<String>),
 }
 
 pub enum MediaFetch {
     Quit,
-    FetchThumbnail(String, WidgetId, u64, u64),
+    FetchThumbnail(Arc<String>, WidgetId, u64, u64),
 }
 
 #[derive(Clone)]
@@ -64,8 +64,8 @@ struct Channel {
 #[derive(Data, Clone)]
 enum ThumbnailState {
     None,
-    Url(String, u64, u64),
-    Processing(String, u64, u64),
+    Url(Arc<String>, u64, u64),
+    Processing(Arc<String>, u64, u64),
     Image(Arc<ImageBuf>, u64, u64),
 }
 
@@ -361,7 +361,7 @@ fn make_message(
                 let info = event.content.get("info").unwrap();
                 let width = info.get("w").and_then(Value::as_u64).unwrap_or(0);
                 let height = info.get("h").and_then(Value::as_u64).unwrap_or(0);
-                ThumbnailState::Url(String::from(url), width, height)
+                ThumbnailState::Url(Arc::new(String::from(url)), width, height)
             }
 
             _ => ThumbnailState::None,
@@ -408,9 +408,9 @@ fn make_message(
 
         Message {
             edit,
-            sender: Arc::new(event.sender.clone()),
+            sender: event.sender.clone(),
             avatar: Arc::new(ImageBuf::empty()),
-            event_id: Arc::new(event.event_id.clone()),
+            event_id: event.event_id.clone(),
             contents: contents.clone(),
             formatted,
             image,
@@ -447,7 +447,7 @@ impl<W> widget::Controller<Chat, widget::Scroll<Chat, W>> for MessageScrollContr
             Event::Command(cmd) if cmd.is(FETCH_FROM_ROOM) => {
                 let (channel, state) = cmd.get_unchecked(FETCH_FROM_ROOM);
                 if let Some(channel) = data.channels_hashed.get_mut(channel) {
-                    channel.prev_batch = Arc::new(state.end.clone());
+                    channel.prev_batch = state.end.clone();
                     if channel.first_batch.is_empty() {
                         channel.first_batch = channel.prev_batch.clone();
                     }
@@ -503,12 +503,12 @@ impl<W> widget::Controller<Chat, widget::Scroll<Chat, W>> for MessageScrollContr
                 x: 0.0,
                 y: 0.0,
             }) || child.child_size().height == 0.0) {
-                match data.txs.sync_tx.try_send(Syncing::FetchFromRoom((*channel.id).clone(), (*channel.prev_batch).clone(), json!({
+                match data.txs.sync_tx.try_send(Syncing::FetchFromRoom(channel.id.clone(), channel.prev_batch.clone(), Arc::new(json!({
                     "limit": 50,
                     "types": [
                         "m.room.message"
                     ]
-                }).to_string())) {
+                }).to_string()))) {
                     Ok(_) => (),
                     Err(TrySendError::Full(_)) => panic!("oh no"),
                     Err(TrySendError::Closed(_)) => panic!("aaaaa"),
@@ -562,8 +562,8 @@ where
         match event {
             Event::WindowConnected => {
                 match data.txs.sync_tx.try_send(Syncing::ClientSync(
-                    String::new(),
-                    json!({
+                    Arc::new(String::new()),
+                    Arc::new(json!({
                         "presence": {
                             "limit": 0,
                         },
@@ -584,8 +584,7 @@ where
                                 "limit": 0,
                             },
                         },
-                    })
-                    .to_string(),
+                    }).to_string()),
                 )) {
                     Ok(_) => (),
                     Err(TrySendError::Full(_)) => panic!("idk what to do here :("),
@@ -596,8 +595,8 @@ where
             Event::Command(cmd) if cmd.is(SYNC_FAIL) => {
                 // TODO: something smarter than this
                 match data.txs.sync_tx.try_send(Syncing::ClientSync(
-                    String::new(),
-                    json!({
+                    Arc::new(String::new()),
+                    Arc::new(json!({
                         "room": {
                             "timeline": {
                                 "limit": 50,
@@ -607,7 +606,7 @@ where
                             }
                         }
                     })
-                    .to_string(),
+                    .to_string()),
                 )) {
                     Ok(_) => (),
                     Err(TrySendError::Full(_)) => panic!("idk what to do here :("),
@@ -625,7 +624,7 @@ where
                                 .timeline
                                 .events
                                 .iter()
-                                .map(make_message(Arc::new(id.clone()), data.txs.clone()))
+                                .map(make_message(id.clone(), data.txs.clone()))
                             {
                                 match m.edit {
                                     Some(e) => edits.push_back(e),
@@ -637,13 +636,13 @@ where
                                 channel.messages.extend(messages);
                             } else {
                                 data.channels_hashed.insert(
-                                    Arc::new(id.clone()),
+                                    id.clone(),
                                     Channel {
-                                        id: Arc::new(id.clone()),
-                                        name: Arc::new(match &joined.name {
+                                        id: id.clone(),
+                                        name: match &joined.name {
                                             Some(v) => v.clone(),
-                                            None => String::from("<unnamed room>"),
-                                        }),
+                                            None => Arc::new(String::from("<unnamed room>")),
+                                        },
                                         messages,
                                         unresolved_edits: Vector::new(),
                                         prev_batch: Arc::new(String::new()),
@@ -653,7 +652,7 @@ where
                                         top: false,
                                     },
                                 );
-                                data.channels.push_back(Arc::new(id.clone()));
+                                data.channels.push_back(id.clone());
                             }
                             if let Some(channel) = data.channels_hashed.get_mut(id) {
                                 let mut resolved = vec![];
@@ -680,7 +679,7 @@ where
 
                 match data.txs.sync_tx.try_send(Syncing::ClientSync(
                     sync.next_batch.clone(),
-                    json!({
+                    Arc::new(json!({
                         "room": {
                             "timeline": {
                                 "limit": 50,
@@ -690,7 +689,7 @@ where
                             }
                         }
                     })
-                    .to_string(),
+                    .to_string()),
                 )) {
                     Ok(_) => (),
                     Err(TrySendError::Full(_)) => panic!("idk what to do here :("),
@@ -734,9 +733,9 @@ where
                         let formatted = markdown::parse_markdown(&*data.editing_message);
                         let formatted = markdown::markdown_to_html(formatted);
                         match data.txs.action_tx.try_send(UserAction::SendMessage(
-                            (*data.current_channel).clone(),
-                            (*data.editing_message).clone(),
-                            formatted,
+                            data.current_channel.clone(),
+                            data.editing_message.clone(),
+                            Arc::new(formatted),
                         )) {
                             Ok(_) => (),
                             Err(TrySendError::Full(_)) => panic!("idk what to do here :("),
@@ -779,10 +778,10 @@ where
                         let formatted = markdown::parse_markdown(&*data.editing_message);
                         let formatted = markdown::markdown_to_html(formatted);
                         match data.txs.action_tx.try_send(UserAction::EditMessage(
-                            (*data.channel).clone(),
-                            (*data.event_id).clone(),
-                            (*data.editing_message).clone(),
-                            formatted,
+                            data.channel.clone(),
+                            data.event_id.clone(),
+                            data.editing_message.clone(),
+                            Arc::new(formatted),
                         )) {
                             Ok(_) => (),
                             Err(TrySendError::Full(_)) => panic!("idk what to do here :("),

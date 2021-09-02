@@ -93,7 +93,7 @@ async fn main() {
                         Some(filter)
                     };
 
-                    match client.get_room_messages(&room_id, &prev_batch, RoomDirection::Backwards, None, Some(50), filter.as_ref()).await {
+                    match client.get_room_messages(&room_id, &prev_batch, RoomDirection::Backwards, None, Some(50), filter).await {
                         Ok(v) => {
                             if event_sink.submit_command(chat_gui::FETCH_FROM_ROOM, (room_id, v), Target::Global).is_err() {
                                 break;
@@ -131,7 +131,7 @@ async fn main() {
 
                     // TODO: error on send
                     let _ = client
-                        .send_message(&room_id, &msg, formatted.as_ref())
+                        .send_message(&room_id, &msg, formatted)
                         .await;
                 }
 
@@ -144,7 +144,7 @@ async fn main() {
 
                     // TODO: error on send
                     let _ = client
-                        .edit_message(&room_id, &event_id, &msg, formatted.as_ref())
+                        .edit_message(&room_id, &event_id, &msg, formatted)
                         .await;
                 }
             }
