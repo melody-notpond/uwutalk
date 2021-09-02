@@ -2,7 +2,8 @@ use std::{collections::HashMap, sync::Arc};
 
 use reqwest::{Client, Error};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::json;
+use ijson::IValue as Value;
 
 pub struct MatrixClient {
     client: Client,
@@ -94,11 +95,11 @@ pub struct SyncRooms {
 pub struct SyncState {
     pub next_batch: Arc<String>,
     pub rooms: Option<SyncRooms>,
-    pub presence: Option<serde_json::Value>,
-    pub account_data: Option<serde_json::Value>,
-    pub to_device: Option<serde_json::Value>,
-    pub device_lists: Option<serde_json::Value>,
-    pub device_one_time_keys_count: Option<serde_json::Value>,
+    pub presence: Option<Value>,
+    pub account_data: Option<Value>,
+    pub to_device: Option<Value>,
+    pub device_lists: Option<Value>,
+    pub device_one_time_keys_count: Option<Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -166,7 +167,7 @@ impl MatrixClient {
             .error_for_status()?
             .text()
             .await?;
-        Ok(serde_json::from_str(&event).unwrap())
+        Ok(serde_json::from_str::<Value>(&event).and_then(|v| ijson::from_value(&v)).unwrap())
     }
 
     pub async fn edit_message(
@@ -223,7 +224,7 @@ impl MatrixClient {
             .error_for_status()?
             .text()
             .await?;
-        Ok(serde_json::from_str(&event).unwrap())
+        Ok(serde_json::from_str::<Value>(&event).and_then(|v| ijson::from_value(&v)).unwrap())
     }
 
     async fn get_name(&self, room: &str) -> Option<Arc<String>> {
@@ -239,7 +240,7 @@ impl MatrixClient {
             .ok()?;
         if name.status() == 200 {
             Some(Arc::new(String::from(
-                serde_json::from_str::<Value>(&name.text().await.ok()?).ok()?["name"].as_str()?,
+                serde_json::from_str::<Value>(&name.text().await.ok()?).ok()?.get("name")?.as_string()?.as_str(),
             )))
         } else {
             let name = self
@@ -255,8 +256,8 @@ impl MatrixClient {
 
             if name.status() == 200 {
                 Some(Arc::new(String::from(
-                    serde_json::from_str::<Value>(&name.text().await.ok()?).ok()?["alias"]
-                        .as_str()?,
+                    serde_json::from_str::<Value>(&name.text().await.ok()?).ok()?.get("alias")?
+                        .as_string()?.as_str(),
                 )))
             } else {
                 None
@@ -291,7 +292,7 @@ impl MatrixClient {
             .text()
             .await?;
 
-        let mut state: SyncState = match tokio::task::spawn_blocking(move|| serde_json::from_str(&state)).await {
+        let mut state: SyncState = match tokio::task::spawn_blocking(move|| serde_json::from_str::<Value>(&state).and_then(|v| ijson::from_value::<SyncState>(&v))).await {
             Ok(Ok(v)) => v,
             Ok(Err(e)) => {
                 panic!("oh no: {}", e);
@@ -307,7 +308,7 @@ impl MatrixClient {
                     joined.name = if let Some(v) = self.get_name(id).await {
                         Some(v)
                     } else {
-                        joined.summary.get("m.heroes").map(|v| v.as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect::<Vec<&str>>().join(", ")).map(Arc::new)
+                        joined.summary.get("m.heroes").map(|v| v.as_array().unwrap().iter().map(|v| v.as_string().unwrap().as_str()).collect::<Vec<&str>>().join(", ")).map(Arc::new)
                     }
                 }
             }
@@ -350,7 +351,7 @@ impl MatrixClient {
             .text()
             .await?;
 
-        let state = match tokio::task::spawn_blocking(move|| serde_json::from_str(&state)).await {
+        let state = match tokio::task::spawn_blocking(move|| serde_json::from_str::<Value>(&state).and_then(|v| ijson::from_value::<RoomMessages>(&v))).await {
             Ok(Ok(v)) => v,
             Ok(Err(e)) => {
                 panic!("oh no: {}", e);

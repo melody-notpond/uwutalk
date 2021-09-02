@@ -8,7 +8,8 @@ use druid::{Color, Data, Env, Event, EventCtx, FontFamily, FontStyle, FontWeight
 use kuchiki::traits::TendrilSink;
 use kuchiki::{NodeData, NodeRef};
 use reqwest::Error;
-use serde_json::{json, Value};
+use serde_json::json;
+use ijson::{IString, IValue as Value};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 // use uwuifier::uwuify_str_sse;
@@ -281,7 +282,7 @@ fn make_rich_text(
     let edited_message = "    (edited)";
     let formatted: Arc<str> = match formatted {
         Some(v) => {
-            let root = kuchiki::parse_html().one(v.as_str().unwrap());
+            let root = kuchiki::parse_html().one(v.as_string().unwrap().as_str());
             let mut result = String::new();
             for child in root.children() {
                 extract_text_and_text_attributes_from_dom(child, &mut result, &mut attrs);
@@ -293,7 +294,7 @@ fn make_rich_text(
         }
 
         None => {
-            let default = default.map(|v| v.as_str().unwrap_or("")).unwrap_or("");
+            let default = default.and_then(|v| v.as_string()).map(IString::as_str).unwrap_or("");
             if mark_edited {
                 let mut default = String::from(default);
                 default.push_str(edited_message);
@@ -356,11 +357,11 @@ fn make_message(
             false,
         );
         let image = match event.content.get("msgtype") {
-            Some(v) if matches!(v.as_str(), Some("m.image")) => {
-                let url = event.content.get("url").unwrap().as_str().unwrap();
+            Some(v) if matches!(v.as_string(), Some(v) if v.as_str() == "m.image") => {
+                let url = event.content.get("url").unwrap().as_string().unwrap().as_str();
                 let info = event.content.get("info").unwrap();
-                let width = info.get("w").and_then(Value::as_u64).unwrap_or(0);
-                let height = info.get("h").and_then(Value::as_u64).unwrap_or(0);
+                let width = info.get("w").and_then(Value::to_u64).unwrap_or(0);
+                let height = info.get("h").and_then(Value::to_u64).unwrap_or(0);
                 ThumbnailState::Url(Arc::new(String::from(url)), width, height)
             }
 
@@ -368,7 +369,7 @@ fn make_message(
         };
 
         let contents = match event.content.get("body") {
-            Some(v) => Arc::new(String::from(v.as_str().unwrap())),
+            Some(v) => Arc::new(String::from(v.as_string().unwrap().as_str())),
             None => Arc::new(String::new()),
         };
 
@@ -376,12 +377,13 @@ fn make_message(
             .content
             .get("m.relates_to")
             .and_then(|v| v.get("rel_type"))
-            .and_then(Value::as_str)
+            .and_then(Value::as_string)
+            .map(IString::as_str)
         {
             Some(v) if v == "m.replace" => {
                 if let Some(new) = event.content.get("m.new_content") {
                     let contents =
-                        Arc::new(String::from(new.get("body").unwrap().as_str().unwrap()));
+                        Arc::new(String::from(new.get("body").unwrap().as_string().unwrap().as_str()));
                     let formatted =
                         make_rich_text(new.get("formatted_body"), new.get("body"), true);
                     Some(Edit {
@@ -392,8 +394,9 @@ fn make_message(
                                 .unwrap()
                                 .get("event_id")
                                 .unwrap()
-                                .as_str()
-                                .unwrap(),
+                                .as_string()
+                                .unwrap()
+                                .as_str(),
                         )),
                         contents,
                         formatted,
@@ -567,9 +570,6 @@ where
                         "presence": {
                             "limit": 0,
                         },
-                        "account_data": {
-                            "limit": 0,
-                        },
                         "room": {
                             "ephemeral": {
                                 "limit": 0,
@@ -578,9 +578,6 @@ where
                                 "limit": 0,
                             },
                             "timeline": {
-                                "limit": 0,
-                            },
-                            "account_data": {
                                 "limit": 0,
                             },
                         },
