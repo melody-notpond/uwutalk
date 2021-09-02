@@ -108,6 +108,20 @@ pub struct Content {
     pub content: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct RoomMessages {
+    pub start: String,
+    pub end: String,
+    pub chunk: Vec<RoomEvent>,
+    pub state: Option<Vec<StateEvent>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum RoomDirection {
+    Forwards,
+    Backwards
+}
+
 impl MatrixClient {
     pub fn new(homeserver: &str, access_code: &str) -> MatrixClient {
         MatrixClient {
@@ -280,10 +294,10 @@ impl MatrixClient {
         let mut state: SyncState = match tokio::task::spawn_blocking(move|| serde_json::from_str(&state)).await {
             Ok(Ok(v)) => v,
             Ok(Err(e)) => {
-                panic!("oh no: {}\n", e);
+                panic!("oh no: {}", e);
             }
             Err(e) => {
-                panic!("oh no: {}\n", e);
+                panic!("oh no: {}", e);
             }
         };
 
@@ -294,6 +308,53 @@ impl MatrixClient {
                 }
             }
         }
+
+        Ok(state)
+    }
+
+    pub async fn get_room_messages(&self, room_id: &str, from: &str, dir: RoomDirection, to: Option<&String>, limit: Option<u64>, filter: Option<&String>) -> Result<RoomMessages, Error> {
+        let dir = match dir {
+            RoomDirection::Forwards => "f",
+            RoomDirection::Backwards => "b",
+        };
+
+        let limit = match limit {
+            Some(v) => format!("{}", v),
+            None => String::from("10"),
+        };
+        let filter = match filter {
+            Some(v) => v.as_str(),
+            None => "",
+        };
+        let mut queries = vec![("from", from), ("dir", dir), ("limit", &limit), ("filter", filter)];
+        if let Some(to) = to {
+            queries.push(("to", to));
+        }
+
+        let state = self
+            .client
+            .get(format!(
+                "https://{}/_matrix/client/r0/rooms/{}/messages",
+                self.homeserver,
+                room_id,
+            ))
+            .query(&queries)
+            .bearer_auth(&self.access_code)
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
+
+        let state = match tokio::task::spawn_blocking(move|| serde_json::from_str(&state)).await {
+            Ok(Ok(v)) => v,
+            Ok(Err(e)) => {
+                panic!("oh no: {}", e);
+            }
+            Err(e) => {
+                panic!("oh no: {}", e);
+            }
+        };
 
         Ok(state)
     }

@@ -13,18 +13,21 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 // use uwuifier::uwuify_str_sse;
 
-use super::chat::{RoomEvent, SyncState};
+use super::chat::{RoomEvent, RoomMessages, SyncState};
 use super::markdown;
 
 pub const SYNC: Selector<SyncState> = Selector::new("uwutalk.matrix.sync");
 pub const SYNC_FAIL: Selector<Error> = Selector::new("uwutalk.matrix.fail.sync");
+pub const FETCH_FROM_ROOM: Selector<(String, RoomMessages)> = Selector::new("uwutalk.matrix.fetch_from_room");
+pub const FETCH_FROM_ROOM_FAIL: Selector<Error> = Selector::new("uwutalk.matrix.fail.fetch_from_room");
 pub const FETCH_THUMBNAIL: Selector<ImageBuf> = Selector::new("uwutalk.matrix.fetch_thumbnail");
-pub const FETCH_THUMBNAIL_FAIL: Selector<Error> =
-    Selector::new("uwutalk.matrix.fail.fetch_thumbnail");
+pub const FETCH_THUMBNAIL_FAIL: Selector<Error> = Selector::new("uwutalk.matrix.fail.fetch_thumbnail");
+const SCROLLED: Selector<()> = Selector::new("uwutalk.matrix.scrolled");
 
 pub enum Syncing {
     Quit,
     ClientSync(String, String),
+    FetchFromRoom(String, String, String)
 }
 
 pub enum UserAction {
@@ -51,7 +54,11 @@ struct Channel {
     name: Arc<String>,
     messages: Vector<Message>,
     unresolved_edits: Vector<Edit>,
+    prev_batch: Arc<String>,
+    first_batch: Arc<String>,
     bottom: bool,
+    fetching_old: bool,
+    top: bool,
 }
 
 #[derive(Data, Clone)]
@@ -94,6 +101,9 @@ pub struct Chat {
     current_channel: Arc<String>,
 
     #[data(ignore)]
+    scroll: Option<f64>,
+
+    #[data(ignore)]
     txs: Senders,
 }
 
@@ -104,6 +114,7 @@ impl Chat {
             channels_hashed: HashMap::new(),
             channels: Vector::new(),
             current_channel: Arc::new(String::new()),
+            scroll: None,
             txs: Senders {
                 sync_tx,
                 action_tx,
@@ -169,7 +180,18 @@ impl Lens<Chat, AllChannels> for AllChannelsLens {
         let v = f(&mut all);
         data.channels_hashed = all.channels_hashed;
         data.channels = all.channels;
-        data.current_channel = all.current_channel;
+        if data.current_channel != all.current_channel {
+            if let Some(channel) = data.channels_hashed.get_mut(&data.current_channel) {
+                channel.bottom = true;
+                channel.top = false;
+                channel.fetching_old = false;
+                if channel.messages.len() > 50 {
+                    channel.messages = channel.messages.skip(channel.messages.len() - 50);
+                }
+                channel.prev_batch = channel.first_batch.clone();
+            }
+            data.current_channel = all.current_channel;
+        }
         v
     }
 }
@@ -406,13 +428,67 @@ impl<W> widget::Controller<Chat, widget::Scroll<Chat, W>> for MessageScrollContr
     where W: Widget<Chat>
 {
     fn event(&mut self, child: &mut widget::Scroll<Chat, W>, ctx: &mut EventCtx, event: &Event, data: &mut Chat, env: &Env) {
-        if let Event::Wheel(wheel) = event {
-            if let Some(channel) = data.channels_hashed.get_mut(&data.current_channel) {
-                if channel.bottom && wheel.wheel_delta.y < 0.0 {
-                    channel.bottom = false;
+        match event {
+            Event::Wheel(wheel) => {
+                if let Some(channel) = data.channels_hashed.get_mut(&data.current_channel) {
+                    if channel.bottom && wheel.wheel_delta.y < 0.0 {
+                        channel.bottom = false;
+                    }
                 }
             }
+
+            Event::Command(cmd) if cmd.is(SCROLLED) && data.scroll.is_some() => {
+                data.scroll = None;
+                if let Some(channel) = data.channels_hashed.get_mut(&data.current_channel) {
+                    channel.fetching_old = false;
+                }
+            }
+
+            Event::Command(cmd) if cmd.is(FETCH_FROM_ROOM) => {
+                let (channel, state) = cmd.get_unchecked(FETCH_FROM_ROOM);
+                if let Some(channel) = data.channels_hashed.get_mut(channel) {
+                    channel.prev_batch = Arc::new(state.end.clone());
+                    if channel.first_batch.is_empty() {
+                        channel.first_batch = channel.prev_batch.clone();
+                    }
+                    channel.top = state.chunk.is_empty();
+                    data.scroll = Some(child.child_size().height);
+
+                    let mut messages = Vector::new();
+                    for m in state
+                        .chunk
+                        .iter()
+                        .map(make_message(channel.id.clone(), data.txs.clone()))
+                    {
+                        match m.edit {
+                            Some(e) => channel.unresolved_edits.push_back(e),
+                            None => messages.push_front(m),
+                        }
+                    }
+
+                    messages.extend(channel.messages.clone());
+                    channel.messages = messages;
+                    let mut resolved = vec![];
+                    for (i, edit) in channel.unresolved_edits.iter().enumerate() {
+                        for msg in channel.messages.iter_mut() {
+                            if msg.event_id == edit.associated_event_id {
+                                msg.contents = edit.contents.clone();
+                                msg.formatted = edit.formatted.clone();
+                                resolved.push(i);
+                                break;
+                            }
+                        }
+                    }
+
+                    for (i, resolved) in resolved.into_iter().enumerate() {
+                        channel.unresolved_edits.remove(resolved - i);
+                    }
+                }
+            }
+
+            _ => (),
         }
+
         child.event(ctx, event, data, env);
 
         if let Some(channel) = data.channels_hashed.get_mut(&data.current_channel) {
@@ -421,6 +497,24 @@ impl<W> widget::Controller<Chat, widget::Scroll<Chat, W>> for MessageScrollContr
                 y: child.child_size().height - 0.01,
             }) {
                 channel.bottom = true;
+            }
+
+            if !channel.fetching_old && !channel.top && (child.viewport_rect().contains(Point {
+                x: 0.0,
+                y: 0.0,
+            }) || child.child_size().height == 0.0) {
+                match data.txs.sync_tx.try_send(Syncing::FetchFromRoom((*channel.id).clone(), (*channel.prev_batch).clone(), json!({
+                    "limit": 50,
+                    "types": [
+                        "m.room.message"
+                    ]
+                }).to_string())) {
+                    Ok(_) => (),
+                    Err(TrySendError::Full(_)) => panic!("oh no"),
+                    Err(TrySendError::Closed(_)) => panic!("aaaaa"),
+                }
+
+                channel.fetching_old = true;
             }
         }
     }
@@ -437,6 +531,11 @@ impl<W> widget::Controller<Chat, widget::Scroll<Chat, W>> for MessageScrollContr
         if let Some(channel) = data.channels_hashed.get(&data.current_channel) {
             if channel.bottom {
                 child.scroll_to_on_axis(Axis::Vertical, f64::INFINITY);
+            } else if let Some(scroll) = data.scroll {
+                if (scroll - child.child_size().height).abs() > 0.001 {
+                    child.scroll_to_on_axis(Axis::Vertical, child.child_size().height - scroll);
+                    ctx.submit_command(SCROLLED);
+                }
             }
         }
     }
@@ -467,7 +566,7 @@ where
                     json!({
                         "room": {
                             "timeline": {
-                                "limit": 50,
+                                "limit": 0,
                                 "types": [
                                     "m.room.message"
                                 ]
@@ -535,7 +634,11 @@ where
                                         }),
                                         messages,
                                         unresolved_edits: Vector::new(),
+                                        prev_batch: Arc::new(String::new()),
+                                        first_batch: Arc::new(String::new()),
                                         bottom: true,
+                                        fetching_old: false,
+                                        top: false,
                                     },
                                 );
                                 data.channels.push_back(Arc::new(id.clone()));
@@ -857,7 +960,23 @@ pub fn build_ui() -> impl Widget<Chat> {
                     v.messages = data;
                 }
             },
-        ))
+        ));
+    let messages = widget::Flex::column()
+        .with_child(widget::Either::new(|data: &Chat, _| {
+            data.current_channel.is_empty() || if let Some(channel) = data.channels_hashed.get(&data.current_channel) {
+                channel.top
+            } else {
+                false
+            }
+        }, widget::Image::new(ImageBuf::empty()), widget::Spinner::new()))
+        .with_child(messages);
+    let messages = widget::Either::new(|data, _| {
+        if let Some(channel) = data.channels_hashed.get(&data.current_channel) {
+            channel.messages.is_empty()
+        } else {
+            false
+        }
+    }, widget::Spinner::new(), messages)
         .scroll()
         .vertical()
         .controller(MessageScrollController)

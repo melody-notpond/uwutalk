@@ -5,7 +5,7 @@ use druid::{AppLauncher, ImageBuf, Target, WindowDesc};
 use tokio::sync::mpsc;
 
 use directories::ProjectDirs;
-use uwutalk::chat::MatrixClient;
+use uwutalk::chat::{MatrixClient, RoomDirection};
 use uwutalk::chat_gui::{self, Chat};
 
 #[tokio::main]
@@ -80,6 +80,28 @@ async fn main() {
                                 .submit_command(chat_gui::SYNC_FAIL, e, Target::Global)
                                 .is_err()
                             {
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                FetchFromRoom(room_id, prev_batch, filter) => {
+                    let filter = if filter.is_empty() {
+                        None
+                    } else {
+                        Some(filter)
+                    };
+
+                    match client.get_room_messages(&room_id, &prev_batch, RoomDirection::Backwards, None, Some(50), filter.as_ref()).await {
+                        Ok(v) => {
+                            if event_sink.submit_command(chat_gui::FETCH_FROM_ROOM, (room_id, v), Target::Global).is_err() {
+                                break;
+                            }
+                        }
+
+                        Err(e) => {
+                            if event_sink.submit_command(chat_gui::FETCH_FROM_ROOM_FAIL, e, Target::Global).is_err() {
                                 break;
                             }
                         }
