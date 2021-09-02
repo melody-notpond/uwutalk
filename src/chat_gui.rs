@@ -564,11 +564,26 @@ where
                 match data.txs.sync_tx.try_send(Syncing::ClientSync(
                     String::new(),
                     json!({
+                        "presence": {
+                            "limit": 0,
+                        },
+                        "account_data": {
+                            "limit": 0,
+                        },
                         "room": {
+                            "ephemeral": {
+                                "limit": 0,
+                            },
+                            "state": {
+                                "limit": 0,
+                            },
                             "timeline": {
                                 "limit": 0,
-                            }
-                        }
+                            },
+                            "account_data": {
+                                "limit": 0,
+                            },
+                        },
                     })
                     .to_string(),
                 )) {
