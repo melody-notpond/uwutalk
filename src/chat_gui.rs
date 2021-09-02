@@ -567,9 +567,6 @@ where
                         "room": {
                             "timeline": {
                                 "limit": 0,
-                                "types": [
-                                    "m.room.message"
-                                ]
                             }
                         }
                     })
