@@ -15,8 +15,8 @@ Matrix client.
      - [ ] Scrollable code blocks
      - [ ] ~~Strikethrough~~ (unsupported in druid; may send pull request later)
      - [ ] ||Spoilers||
-     - [ ] # Headings
-     - [ ] [Links](https://lauwa.xyz)
+     - [x] # Headings
+     - [x] [Links](https://lauwa.xyz)
      - [ ] Line break thingies
      - [ ]  - Bullet points
      - [ ] > Quote blocks

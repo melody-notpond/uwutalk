@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use druid::im::{HashMap, Vector};
 use druid::keyboard_types::Key;
-use druid::text::{Attribute, RichText};
+use druid::text::{Attribute, RichText, RichTextBuilder};
 use druid::widget::{Axis, CrossAxisAlignment, LineBreaking, ListIter};
 use druid::{Color, Data, Env, Event, EventCtx, FontFamily, FontStyle, FontWeight, ImageBuf, Lens, LensExt, Point, Selector, TextAlignment, Widget, WidgetExt, WidgetId, widget};
 use kuchiki::traits::TendrilSink;
@@ -24,6 +24,7 @@ pub const FETCH_FROM_ROOM_FAIL: Selector<Error> = Selector::new("uwutalk.matrix.
 pub const FETCH_THUMBNAIL: Selector<ImageBuf> = Selector::new("uwutalk.matrix.fetch_thumbnail");
 pub const FETCH_THUMBNAIL_FAIL: Selector<Error> = Selector::new("uwutalk.matrix.fail.fetch_thumbnail");
 const SCROLLED: Selector<()> = Selector::new("uwutalk.matrix.scrolled");
+const LINK: Selector<Arc<str>> = Selector::new("uwutalk.matrix.link");
 
 pub enum Syncing {
     Quit,
@@ -225,38 +226,110 @@ impl ListIter<(Arc<String>, Channel)> for AllChannels {
     }
 }
 
-struct Element {
-    name: String,
-    attributes: std::collections::HashMap<String, String>,
-}
-
 fn extract_text_and_text_attributes_from_dom(
     node: NodeRef,
-    buffer: &mut String,
-    attrs: &mut Vec<((usize, usize), Element)>,
+    builder: &mut RichTextBuilder,
+    current_pos: &mut usize,
 ) {
     match node.data() {
-        NodeData::Text(t) => buffer.push_str(&*t.borrow()),
+        NodeData::Text(t) => {
+            let t = t.borrow();
+            builder.push(&*t);
+            *current_pos += t.len();
+        }
 
         NodeData::Element(e) => {
-            let index = attrs.len();
-            attrs.push((
-                (buffer.len(), 0),
-                Element {
-                    name: e.name.local.to_string(),
-                    attributes: e
-                        .attributes
-                        .borrow()
-                        .map
-                        .iter()
-                        .map(|(name, val)| (name.local.to_string(), val.value.clone()))
-                        .collect(),
-                },
-            ));
+            let start = *current_pos;
             for child in node.children() {
-                extract_text_and_text_attributes_from_dom(child, buffer, attrs);
+                extract_text_and_text_attributes_from_dom(child, builder, current_pos);
             }
-            attrs[index].0 .1 = buffer.len();
+            let end = *current_pos;
+            if e.name.local.as_ref().starts_with('h') || e.name.local.as_ref() == "br" {
+                builder.push("\n");
+                *current_pos += 1;
+            }
+
+            let text_size = 16.0;
+            match e.name.local.as_ref() {
+                "em" => {
+                    builder.add_attributes_for_range(start..end)
+                        .add_attr(Attribute::Style(FontStyle::Italic));
+                }
+
+                "strong" => {
+                    builder.add_attributes_for_range(start..end)
+                        .add_attr(Attribute::Weight(FontWeight::new(700)));
+                }
+
+                "u" => {
+                    builder.add_attributes_for_range(start..end)
+                        .add_attr(Attribute::Underline(true));
+                }
+
+                "code" => {
+                    builder.add_attributes_for_range(start..end)
+                        .add_attr(Attribute::FontFamily(FontFamily::MONOSPACE))
+                        .add_attr(Attribute::text_color(Color::grey8(200)));
+                }
+
+                "h1" => {
+                    builder.add_attributes_for_range(start..end)
+                        .add_attr(Attribute::size(text_size * 2.0))
+                        .add_attr(Attribute::Weight(FontWeight::new(700)));
+                }
+
+                "h2" => {
+                    builder.add_attributes_for_range(start..end)
+                        .add_attr(Attribute::size(text_size * 1.5))
+                        .add_attr(Attribute::Weight(FontWeight::new(700)));
+                }
+
+                "h3" => {
+                    builder.add_attributes_for_range(start..end)
+                        .add_attr(Attribute::size(text_size * 1.17))
+                        .add_attr(Attribute::Weight(FontWeight::new(700)));
+                }
+
+                "h4" => {
+                    builder.add_attributes_for_range(start..end)
+                        .add_attr(Attribute::size(text_size))
+                        .add_attr(Attribute::Weight(FontWeight::new(700)));
+                }
+
+                "h5" => {
+                    builder.add_attributes_for_range(start..end)
+                        .add_attr(Attribute::size(text_size * 0.83))
+                        .add_attr(Attribute::Weight(FontWeight::new(700)));
+                }
+
+                "h6" => {
+                    builder.add_attributes_for_range(start..end)
+                        .add_attr(Attribute::size(text_size * 0.67))
+                        .add_attr(Attribute::Weight(FontWeight::new(700)));
+                }
+
+                "span" if e.attributes.borrow().contains("data-mx-spoiler") => {
+                    // TODO
+                }
+
+                "a" => {
+                    let attrs = e.attributes.borrow();
+                    let mut href = attrs.get("href").unwrap_or("");
+                    let mut buffer = String::new();
+                    if !href.is_empty() && !href.contains("://") {
+                        buffer.push_str("https://");
+                        buffer.push_str(href);
+                        href = buffer.as_str();
+                    }
+
+                    builder.add_attributes_for_range(start..end)
+                        .add_attr(Attribute::text_color(Color::BLUE))
+                        .add_attr(Attribute::Underline(true))
+                        .link(LINK.with(Arc::from(href)));
+                }
+
+                _ => (),
+            }
         }
 
         NodeData::Comment(_) => (),
@@ -265,7 +338,7 @@ fn extract_text_and_text_attributes_from_dom(
 
         NodeData::Document(_) => {
             for child in node.children() {
-                extract_text_and_text_attributes_from_dom(child, buffer, attrs);
+                extract_text_and_text_attributes_from_dom(child, builder, current_pos);
             }
         }
 
@@ -278,72 +351,36 @@ fn make_rich_text(
     default: Option<&Value>,
     mark_edited: bool,
 ) -> RichText {
-    let mut attrs = vec![];
     let edited_message = "    (edited)";
-    let formatted: Arc<str> = match formatted {
+
+    match formatted {
         Some(v) => {
             let root = kuchiki::parse_html().one(v.as_string().unwrap().as_str());
-            let mut result = String::new();
-            for child in root.children() {
-                extract_text_and_text_attributes_from_dom(child, &mut result, &mut attrs);
-            }
+            let mut builder = RichTextBuilder::new();
+            let mut current_pos = 0;
+            extract_text_and_text_attributes_from_dom(root, &mut builder, &mut current_pos);
             if mark_edited {
-                result.push_str(edited_message);
+                builder.push(edited_message);
+                builder.add_attributes_for_range(current_pos..)
+                    .add_attr(Attribute::text_color(Color::GRAY))
+                    .add_attr(Attribute::size(10.0));
             }
-            Arc::from(result)
+            builder.build()
         }
 
         None => {
+            let mut builder = RichTextBuilder::new();
             let default = default.and_then(|v| v.as_string()).map(IString::as_str).unwrap_or("");
+            builder.push(default);
             if mark_edited {
-                let mut default = String::from(default);
-                default.push_str(edited_message);
-                Arc::from(default)
-            } else {
-                Arc::from(default)
+                builder.push(edited_message);
+                builder.add_attributes_for_range(default.len()..)
+                    .add_attr(Attribute::text_color(Color::GRAY))
+                    .add_attr(Attribute::size(10.0));
             }
-        }
-    };
-
-    let mut formatted = RichText::new(formatted);
-    for ((s, e), attr) in attrs {
-        match attr.name.as_str() {
-            "em" => {
-                formatted.add_attribute(s..e, Attribute::Style(FontStyle::Italic));
-            }
-
-            "strong" => {
-                formatted.add_attribute(s..e, Attribute::Weight(FontWeight::new(700)));
-            }
-
-            "u" => {
-                formatted.add_attribute(s..e, Attribute::Underline(true));
-            }
-
-            "code" => {
-                formatted.add_attribute(s..e, Attribute::FontFamily(FontFamily::MONOSPACE));
-                formatted.add_attribute(s..e, Attribute::text_color(Color::grey8(200)));
-            }
-
-            "span" if attr.attributes.contains_key("data-mx-spoiler") => {
-                // TODO
-            }
-
-            "a" => {
-                // TODO
-            }
-
-            _ => (),
+            builder.build()
         }
     }
-
-    if mark_edited {
-        let range = formatted.len() - edited_message.len()..;
-        formatted.add_attribute(range.clone(), Attribute::text_color(Color::GRAY));
-        formatted.add_attribute(range, Attribute::size(10.0));
-    }
-
-    formatted
 }
 
 fn make_message(
@@ -691,6 +728,13 @@ where
                     Ok(_) => (),
                     Err(TrySendError::Full(_)) => panic!("idk what to do here :("),
                     Err(TrySendError::Closed(_)) => panic!("oh no"),
+                }
+            }
+
+            Event::Command(cmd) if cmd.is(LINK) => {
+                let link = cmd.get_unchecked(LINK);
+                if open::that(&**link).is_err() {
+                    eprintln!("error opening link {}", link);
                 }
             }
 
