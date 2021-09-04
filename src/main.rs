@@ -1,4 +1,5 @@
 use tokio::fs;
+use std::collections::HashMap;
 use std::path::Path;
 
 use druid::{AppLauncher, ImageBuf, Target, WindowDesc};
@@ -157,13 +158,30 @@ async fn main() {
 
     let media = tokio::spawn(async move {
         use uwutalk::chat_gui::MediaFetch::*;
+        let mut thumbnails_map: HashMap<String, ImageBuf> = HashMap::new();
 
         while let Some(msg) = rx.recv().await {
+
             match msg {
                 Quit => break,
 
                 FetchThumbnail(url, widget, width, height) => {
                     if let Some(url) = url.strip_prefix("mxc://") {
+                        if let Some(v) = thumbnails_map.get(url) {
+                            if event_sink
+                            .submit_command(
+                                chat_gui::FETCH_THUMBNAIL,
+                                v.clone(),
+                                Target::Widget(widget),
+                            )
+                            .is_err()
+                            {
+                                    break;
+                            }
+
+                            continue;
+                        }
+
                         let mut split = url.split('/');
                         let server = split.next().unwrap_or("");
                         let media = split.next().unwrap_or("");
@@ -234,6 +252,7 @@ async fn main() {
 
                         match tokio::task::spawn_blocking(move || ImageBuf::from_data(&content)).await {
                             Ok(Ok(v)) => {
+                                thumbnails_map.insert(String::from(url), v.clone());
                                 if event_sink
                                     .submit_command(
                                         chat_gui::FETCH_THUMBNAIL,
