@@ -79,11 +79,18 @@ struct Edit {
     formatted: RichText,
 }
 
+#[derive(Data, Clone)]
+enum AvatarState {
+    Name(Arc<String>),
+    Processing(Arc<String>),
+    Image(Arc<ImageBuf>),
+}
+
 #[derive(Data, Clone, Lens)]
 struct Message {
     edit: Option<Edit>,
     sender: Arc<String>,
-    avatar: Arc<ImageBuf>,
+    avatar: AvatarState,
     event_id: Arc<String>,
     contents: Arc<String>,
     formatted: RichText,
@@ -450,7 +457,7 @@ fn make_message(
         Message {
             edit,
             sender: event.sender.clone(),
-            avatar: Arc::new(ImageBuf::empty()),
+            avatar: AvatarState::Name(event.sender.clone()),
             event_id: event.event_id.clone(),
             contents: contents.clone(),
             formatted,
@@ -928,6 +935,44 @@ where
     }
 }
 
+struct AvatarController;
+
+impl<W> widget::Controller<Message, W> for AvatarController
+    where W: widget::Widget<Message>
+{
+    fn event(&mut self, child: &mut W, ctx: &mut EventCtx, event: &Event, data: &mut Message, env: &Env) {
+        match event {
+            Event::Command(cmd) if cmd.is(SYNC) => {
+                if let AvatarState::Name(name) = &data.avatar {
+                    match data.txs.media_tx.try_send(MediaFetch::AvatarFetch(
+                        name.clone(),
+                        ctx.widget_id(),
+                    )) {
+                        Ok(_) => (),
+                        Err(TrySendError::Full(_)) => panic!("oh no"),
+                        Err(TrySendError::Closed(_)) => panic!("oh no"),
+                    }
+                    data.avatar = AvatarState::Processing(name.clone());
+                    ctx.set_handled();
+                } else {
+                    child.event(ctx, event, data, env);
+                }
+            }
+
+            Event::Command(cmd) if cmd.is(FETCH_THUMBNAIL) => {
+                let image = cmd.get_unchecked(FETCH_THUMBNAIL);
+
+                data.avatar = AvatarState::Image(
+                    Arc::new(image.clone()),
+                );
+                ctx.set_handled();
+            }
+
+            _ => child.event(ctx, event, data, env),
+        }
+    }
+}
+
 fn create_message() -> impl Widget<Message> {
     let contents = widget::ViewSwitcher::new(
         |data: &Message, _| {
@@ -987,9 +1032,17 @@ fn create_message() -> impl Widget<Message> {
         .with_spacer(2.0)
         .with_child(contents);
     column.set_cross_axis_alignment(CrossAxisAlignment::Start);
-    let avatar = widget::Image::new(ImageBuf::empty())
-        .lens(Message::avatar)
-        .fix_size(64.0, 64.0);
+    let avatar = widget::ViewSwitcher::new(|data: &Message, _| matches!(data.avatar, AvatarState::Image(_)), |_, data, _| {
+        match &data.avatar {
+            AvatarState::Name(_)
+            | AvatarState::Processing(_) => widget::Image::new(ImageBuf::empty())
+                .boxed(),
+            AvatarState::Image(buffer) => widget::Image::new((**buffer).clone())
+                .boxed(),
+        }
+    })
+        .controller(AvatarController)
+        .fix_size(32.0, 32.0);
     let mut row = widget::Flex::row()
         .with_child(avatar)
         .with_spacer(2.0)

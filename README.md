@@ -22,7 +22,7 @@ Matrix client.
      - [ ] > Quote blocks
      - [ ] Arbitrary html
  - [ ] Messages
-     - [ ] Showing user avatars
+     - [x] Showing user avatars
      - [ ] Showing user nicknames
      - [x] Receiving images
      - [ ] Viewing the actual image (ie, not a thumbnail)

@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use reqwest::{Client, Error};
 use serde::Deserialize;
 use serde_json::json;
-use ijson::IValue as Value;
+use ijson::{IString, IValue as Value};
 
 pub struct MatrixClient {
     client: Client,
@@ -418,6 +418,6 @@ impl MatrixClient {
             .error_for_status()?
             .text()
             .await?;
-        Ok(serde_json::from_str::<Value>(&response).unwrap().get("avatar_url").unwrap().as_string().unwrap().as_str().to_string())
+        Ok(serde_json::from_str::<Value>(&response).unwrap().get("avatar_url").and_then(|v| v.as_string()).map(IString::as_str).unwrap_or_default().to_string())
     }
 }

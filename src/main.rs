@@ -281,9 +281,8 @@ async fn main() {
 
                 AvatarFetch(name, widget) => {
                     let url = client.fetch_avatar_url(&name).await.unwrap_or_default();
-                    let width = 64;
-                    let height = 64;
-                    fetch_thumbnail!(url, widget, width, height, thumbnails_map, event_sink, client, thumbnails);
+                    let dim = 64;
+                    fetch_thumbnail!(url, widget, dim, dim, thumbnails_map, event_sink, client, thumbnails);
                 }
             }
         }
