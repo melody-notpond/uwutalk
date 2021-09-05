@@ -41,6 +41,7 @@ pub enum UserAction {
 pub enum MediaFetch {
     Quit,
     FetchThumbnail(Arc<String>, WidgetId, u64, u64),
+    AvatarFetch(Arc<String>, WidgetId),
 }
 
 #[derive(Clone)]
@@ -988,7 +989,7 @@ fn create_message() -> impl Widget<Message> {
     column.set_cross_axis_alignment(CrossAxisAlignment::Start);
     let avatar = widget::Image::new(ImageBuf::empty())
         .lens(Message::avatar)
-        .fix_size(50.0, 50.0);
+        .fix_size(64.0, 64.0);
     let mut row = widget::Flex::row()
         .with_child(avatar)
         .with_spacer(2.0)

@@ -9,6 +9,117 @@ use directories::ProjectDirs;
 use uwutalk::chat::{MatrixClient, RoomDirection};
 use uwutalk::chat_gui::{self, Chat};
 
+macro_rules! fetch_thumbnail {
+    ($url: ident, $widget: ident, $width: ident, $height: ident, $thumbnails_map: ident, $event_sink: ident, $client: ident, $thumbnails: ident) => {
+        if let Some(url) = $url.strip_prefix("mxc://") {
+            if let Some(v) = $thumbnails_map.get(url) {
+                if $event_sink
+                .submit_command(
+                    chat_gui::FETCH_THUMBNAIL,
+                    v.clone(),
+                    Target::Widget($widget),
+                )
+                .is_err()
+                {
+                        break;
+                }
+
+                continue;
+            }
+
+            let mut split = url.split('/');
+            let server = split.next().unwrap_or("");
+            let media = split.next().unwrap_or("");
+
+            let mut thumbnails_dir = match $thumbnails.read_dir() {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("error reading cache directory: {:?}", e);
+                    std::process::exit(-1);
+                }
+            };
+            let mut name = String::new();
+            name.push_str(server);
+            name.push('%');
+            name.push_str(media);
+            let content = if let Some(thumbnail) = thumbnails_dir.find(|v| match v {
+                Ok(v) => {
+                    let filename = v.file_name();
+                    let s = Path::new(&filename).to_str().unwrap();
+                    s == name
+                }
+
+                Err(_) => false,
+            }) {
+                match fs::read(thumbnail.unwrap().path()).await {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        eprintln!("error reading cached thumbnail: {:?}", e);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            let content = match content {
+                Some(v) => v,
+                None => {
+                    match $client.thumbnail_mxc(server, media, $width, $height).await {
+                        Ok(v) => {
+                            let content = v.content;
+                            let path = $thumbnails.join(name);
+                            match fs::write(path, &content).await {
+                                Ok(_) => (),
+                                Err(e) => {
+                                    eprintln!("error writing cache: {:?}", e);
+                                }
+                            }
+                            content
+                        }
+
+                        Err(e) => {
+                            if $event_sink
+                                .submit_command(
+                                    chat_gui::FETCH_THUMBNAIL_FAIL,
+                                    e,
+                                    Target::Widget($widget),
+                                )
+                                .is_err()
+                            {
+                                break;
+                            }
+                            continue;
+                        }
+                    }
+                }
+            };
+
+            match tokio::task::spawn_blocking(move || ImageBuf::from_data(&content)).await {
+                Ok(Ok(v)) => {
+                    $thumbnails_map.insert(String::from(url), v.clone());
+                    if $event_sink
+                        .submit_command(
+                            chat_gui::FETCH_THUMBNAIL,
+                            v,
+                            Target::Widget($widget),
+                        )
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+
+                Ok(Err(e)) => eprintln!("error loading image: {:?}", e),
+
+                Err(e) => eprintln!("error spawning blocking thread: {:?}", e),
+            }
+        } else {
+            // TODO
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let project = ProjectDirs::from("xyz", "lauwa", "uwutalk")
@@ -161,115 +272,18 @@ async fn main() {
         let mut thumbnails_map: HashMap<String, ImageBuf> = HashMap::new();
 
         while let Some(msg) = rx.recv().await {
-
             match msg {
                 Quit => break,
 
                 FetchThumbnail(url, widget, width, height) => {
-                    if let Some(url) = url.strip_prefix("mxc://") {
-                        if let Some(v) = thumbnails_map.get(url) {
-                            if event_sink
-                            .submit_command(
-                                chat_gui::FETCH_THUMBNAIL,
-                                v.clone(),
-                                Target::Widget(widget),
-                            )
-                            .is_err()
-                            {
-                                    break;
-                            }
+                    fetch_thumbnail!(url, widget, width, height, thumbnails_map, event_sink, client, thumbnails);
+                }
 
-                            continue;
-                        }
-
-                        let mut split = url.split('/');
-                        let server = split.next().unwrap_or("");
-                        let media = split.next().unwrap_or("");
-
-                        let mut thumbnails_dir = match thumbnails.read_dir() {
-                            Ok(v) => v,
-                            Err(e) => {
-                                eprintln!("error reading cache directory: {:?}", e);
-                                std::process::exit(-1);
-                            }
-                        };
-                        let mut name = String::new();
-                        name.push_str(server);
-                        name.push('%');
-                        name.push_str(media);
-                        let content = if let Some(thumbnail) = thumbnails_dir.find(|v| match v {
-                            Ok(v) => {
-                                let filename = v.file_name();
-                                let s = Path::new(&filename).to_str().unwrap();
-                                s == name
-                            }
-
-                            Err(_) => false,
-                        }) {
-                            match fs::read(thumbnail.unwrap().path()).await {
-                                Ok(v) => Some(v),
-                                Err(e) => {
-                                    eprintln!("error reading cached thumbnail: {:?}", e);
-                                    None
-                                }
-                            }
-                        } else {
-                            None
-                        };
-
-                        let content = match content {
-                            Some(v) => v,
-                            None => {
-                                match client.thumbnail_mxc(server, media, width, height).await {
-                                    Ok(v) => {
-                                        let content = v.content;
-                                        let path = thumbnails.join(name);
-                                        match fs::write(path, &content).await {
-                                            Ok(_) => (),
-                                            Err(e) => {
-                                                eprintln!("error writing cache: {:?}", e);
-                                            }
-                                        }
-                                        content
-                                    }
-
-                                    Err(e) => {
-                                        if event_sink
-                                            .submit_command(
-                                                chat_gui::FETCH_THUMBNAIL_FAIL,
-                                                e,
-                                                Target::Widget(widget),
-                                            )
-                                            .is_err()
-                                        {
-                                            break;
-                                        }
-                                        continue;
-                                    }
-                                }
-                            }
-                        };
-
-                        match tokio::task::spawn_blocking(move || ImageBuf::from_data(&content)).await {
-                            Ok(Ok(v)) => {
-                                thumbnails_map.insert(String::from(url), v.clone());
-                                if event_sink
-                                    .submit_command(
-                                        chat_gui::FETCH_THUMBNAIL,
-                                        v,
-                                        Target::Widget(widget),
-                                    )
-                                    .is_err()
-                                {
-                                    break;
-                                }
-                            }
-
-                            Ok(Err(e)) => eprintln!("error loading image: {:?}", e),
-
-                            Err(e) => eprintln!("error spawning blocking thread: {:?}", e),
-                        }
-                    }
+                AvatarFetch(name, widget) => {
+                    let url = client.fetch_avatar_url(&name).await.unwrap_or_default();
+                    let width = 64;
+                    let height = 64;
+                    fetch_thumbnail!(url, widget, width, height, thumbnails_map, event_sink, client, thumbnails);
                 }
             }
         }
@@ -280,3 +294,4 @@ async fn main() {
     action.await.unwrap();
     media.await.unwrap();
 }
+

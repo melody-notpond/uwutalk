@@ -205,6 +205,7 @@ pub fn parse_markdown(s: &str) -> Vec<MarkdownAst<'_>> {
     let mut wrapper = None;
     while i < len {
         if bytes[i] > b'\x7f' {
+            i += 1;
             continue;
         }
 

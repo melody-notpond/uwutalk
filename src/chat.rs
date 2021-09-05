@@ -405,4 +405,19 @@ impl MatrixClient {
 
         Ok(content)
     }
+
+    pub async fn fetch_avatar_url(&self, user: &str) -> Result<String, Error> {
+        let response = self
+            .client
+            .get(format!(
+                "https://{}/_matrix/client/r0/profile/{}/avatar_url",
+                self.homeserver, user,
+            ))
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
+        Ok(serde_json::from_str::<Value>(&response).unwrap().get("avatar_url").unwrap().as_string().unwrap().as_str().to_string())
+    }
 }
